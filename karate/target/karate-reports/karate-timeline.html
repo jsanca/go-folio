@@ -1,0 +1,32 @@
+<!DOCTYPE HTML>
+<html lang="en">
+  <head>
+    <meta charset="utf-8"/>
+    <title>Karate Timeline</title>
+    <style>
+      body, html { font-family: arial, sans-serif; font-size: 11pt; }
+      #visualization { box-sizing: border-box; width: 100%; height: 300px; }
+      .vis-item.failed { background-color: #F2928C; }
+      .page-heading { padding: 0.5em; margin-bottom: 0.5em; background-color: lightcyan; border: 1px solid gray; }
+    </style>
+    <script src="res/vis.min.js"></script>
+    <link href="res/vis.min.css" rel="stylesheet" type="text/css" />
+  </head>
+  <body>
+    <div class="page-heading">
+      <a href="karate-summary.html">Summary</a>
+    </div>     
+    <div id="visualization"></div>
+    <script>
+var groups = [{"content":"main","id":1}];
+var items = [{"id":1,"group":1,"content":"products/products[1:15]","start":1778733366240,"end":1778733366701,"title":"products/products[1:15] 22:36:06.240-22:36:06.701 Full product lifecycle","className":"failed"},{"id":2,"group":1,"content":"products/products[2:121]","start":1778733366728,"end":1778733366735,"title":"products/products[2:121] 22:36:06.728-22:36:06.735 List products returns a JSON array","className":"failed"},{"id":3,"group":1,"content":"products/products[3:131]","start":1778733366745,"end":1778733366752,"title":"products/products[3:131] 22:36:06.745-22:36:06.752 Create product with missing SKU returns 400 INVALID_PRODUCT","className":"failed"},{"id":4,"group":1,"content":"products/products[4:151]","start":1778733366761,"end":1778733366772,"title":"products/products[4:151] 22:36:06.761-22:36:06.772 Create product with duplicate SKU returns 409 DUPLICATE_SKU","className":"failed"},{"id":5,"group":1,"content":"products/products[5:194]","start":1778733366781,"end":1778733366792,"title":"products/products[5:194] 22:36:06.781-22:36:06.792 Create product with duplicate slug returns 409 DUPLICATE_SLUG","className":"failed"},{"id":6,"group":1,"content":"products/products[6:237]","start":1778733366800,"end":1778733366806,"title":"products/products[6:237] 22:36:06.800-22:36:06.806 Get non-existing product by ID returns 404 PRODUCT_NOT_FOUND","className":"failed"},{"id":7,"group":1,"content":"products/products[7:244]","start":1778733366814,"end":1778733366820,"title":"products/products[7:244] 22:36:06.814-22:36:06.820 Malformed JSON returns 400 INVALID_JSON","className":"failed"},{"id":8,"group":1,"content":"products/products[8:252]","start":1778733366828,"end":1778733366833,"title":"products/products[8:252] 22:36:06.828-22:36:06.833 Unknown JSON field returns 400 INVALID_JSON","className":"failed"}];
+</script>
+    <script>
+      var container = document.getElementById('visualization');
+      var timeline = new vis.Timeline(container);
+      timeline.setOptions({groupOrder: 'content'});
+      timeline.setGroups(new vis.DataSet(groups));
+      timeline.setItems(new vis.DataSet(items));
+    </script>
+  </body>
+</html>

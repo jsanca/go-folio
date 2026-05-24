@@ -1,0 +1,26 @@
+services:
+  catalog-service:
+    build:
+      context: ./catalog-service
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_PATH=/data/catalog.db
+    volumes:
+      - catalog-data:/data
+
+  inventory-service:
+    build:
+      context: ./inventory-service
+      dockerfile: Dockerfile
+    ports:
+      - "9090:9090"
+    environment:
+      - DB_PATH=/data/inventory.db
+    volumes:
+      - inventory-data:/data
+
+volumes:
+  catalog-data:
+  inventory-data:

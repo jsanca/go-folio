@@ -7,7 +7,7 @@
 *.dll
 *.so
 *.dylib
-
+*.DS_Store
 # Test binary, built with `go test -c`
 *.test
 
@@ -27,6 +27,8 @@ go.work.sum
 # env file
 .env
 
+./agent-task
+leatherstore.db
 # Editor/IDE
 # .idea/
 # .vscode/
