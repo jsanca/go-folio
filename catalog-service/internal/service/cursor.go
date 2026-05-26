@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/leatherstore/catalog-service/internal/domain"
+	"github.com/jsanca/go-folio/internal/domain"
 )
 
 func encodeCursor(c domain.SyncCursor) string {

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/leatherstore/catalog-service/internal/domain"
-	"github.com/leatherstore/catalog-service/internal/repository"
+	"github.com/jsanca/go-folio/internal/domain"
+	"github.com/jsanca/go-folio/internal/repository"
 )
 
 // fakeProductRepository is an in-memory ProductRepository for unit tests.

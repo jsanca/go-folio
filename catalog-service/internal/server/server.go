@@ -9,9 +9,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/leatherstore/catalog-service/internal/handler"
-	"github.com/leatherstore/catalog-service/internal/observability"
-	"github.com/leatherstore/catalog-service/internal/runtime"
+	"github.com/jsanca/go-folio/internal/handler"
+	"github.com/jsanca/go-folio/internal/observability"
+	"github.com/jsanca/go-folio/internal/runtime"
 )
 
 // Server wraps the HTTP router and its dependencies.

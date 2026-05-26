@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/leatherstore/catalog-service/internal/domain"
-	"github.com/leatherstore/catalog-service/internal/repository"
+	"github.com/jsanca/go-folio/internal/domain"
+	"github.com/jsanca/go-folio/internal/repository"
 )
 
 const defaultListLimit = 1000

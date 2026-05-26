@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leatherstore/catalog-service/internal/domain"
+	"github.com/jsanca/go-folio/internal/domain"
 )
 
 func TestCursor_EncodeAndDecode_RoundTrip(t *testing.T) {

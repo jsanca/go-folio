@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leatherstore/catalog-service/internal/domain"
+	"github.com/jsanca/go-folio/internal/domain"
 )
 
 // SQLiteCatalogRepository implements CatalogProductRepository,

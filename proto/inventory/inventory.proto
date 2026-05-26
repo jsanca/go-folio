@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package inventory;
+
+option go_package = "github.com/jsanca/go-folio/proto/inventory";
+
+service InventoryService {
+  rpc GetStock(GetStockRequest) returns (GetStockResponse);
+  rpc AdjustStock(AdjustStockRequest) returns (AdjustStockResponse);
+  rpc ReserveStock(ReserveStockRequest) returns (ReserveStockResponse);
+  rpc ReleaseStock(ReleaseStockRequest) returns (ReleaseStockResponse);
+  rpc SyncStock(stream SyncStockRequest) returns (stream SyncStockResponse); // bulk
+}
+
+message GetStockRequest {
+  string sku = 1;
+}
+
+message GetStockResponse {
+  string sku = 1;
+  int32 available = 2;
+  int32 reserved = 3;
+}
+
+message AdjustStockRequest {
+  string sku = 1;
+  int32 delta = 2; // positivo = entrada, negativo = salida
+  string reason = 3;
+}
+
+message AdjustStockResponse {
+  string sku = 1;
+  int32 available = 2;
+}
+
+message ReserveStockRequest {
+  string sku = 1;
+  int32 quantity = 2;
+  string order_id = 3;
+}
+
+message ReserveStockResponse {
+  bool success = 1;
+  string reservation_id = 2;
+}
+
+message ReleaseStockRequest {
+  string reservation_id = 1;
+}
+
+message ReleaseStockResponse {
+  bool success = 1;
+}
+
+message SyncStockRequest {
+  string sku = 1;
+  int32 quantity = 2;
+}
+
+message SyncStockResponse {
+  string sku = 1;
+  bool updated = 2;
+}

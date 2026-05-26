@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 
-	"github.com/leatherstore/catalog-service/internal/domain"
+	"github.com/jsanca/go-folio/internal/domain"
 )
 
 // CatalogSyncRepository provides bulk, cursor-paginated sync queries.

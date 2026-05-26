@@ -6,8 +6,8 @@ import (
 	"log"
 	"log/slog"
 
-	"github.com/leatherstore/catalog-service/internal/domain"
-	"github.com/leatherstore/catalog-service/internal/service"
+	"github.com/jsanca/go-folio/internal/domain"
+	"github.com/jsanca/go-folio/internal/service"
 )
 
 // Run seeds both product and catalog data if the database is empty.

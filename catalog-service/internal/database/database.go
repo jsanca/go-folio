@@ -7,8 +7,8 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/leatherstore/catalog-service/internal/config"
-	"github.com/leatherstore/catalog-service/migrations"
+	"github.com/jsanca/go-folio/internal/config"
+	"github.com/jsanca/go-folio/migrations"
 )
 
 // Connect opens a SQLite database using cfg.DBPath, applies all migrations in

@@ -8,9 +8,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/leatherstore/catalog-service/internal/domain"
-	"github.com/leatherstore/catalog-service/internal/repository"
-	"github.com/leatherstore/catalog-service/internal/service"
+	"github.com/jsanca/go-folio/internal/domain"
+	"github.com/jsanca/go-folio/internal/repository"
+	"github.com/jsanca/go-folio/internal/service"
 )
 
 type ProductHandler struct {

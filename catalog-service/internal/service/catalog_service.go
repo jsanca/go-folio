@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 
-	"github.com/leatherstore/catalog-service/internal/domain"
+	"github.com/jsanca/go-folio/internal/domain"
 )
 
 // CatalogService manages the product catalog: products, variants, and images.
