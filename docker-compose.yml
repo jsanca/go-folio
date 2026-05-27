@@ -1,7 +1,7 @@
 services:
   catalog-service:
     build:
-      context: ./catalog-service
+      context: ./server/catalog-service
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
@@ -12,7 +12,7 @@ services:
 
   inventory-service:
     build:
-      context: ./inventory-service
+      context: ./server/inventory-service
       dockerfile: Dockerfile
     ports:
       - "9090:9090"
@@ -21,6 +21,31 @@ services:
     volumes:
       - inventory-data:/data
 
+  gateway-service:
+    build:
+      context: .
+      dockerfile: server/gateway-service/Dockerfile
+    ports:
+      - "8090:8090"
+    environment:
+      - CATALOG_URL=http://catalog-service:8080
+      - INVENTORY_ADDR=inventory-service:9090
+    depends_on:
+      - catalog-service
+      - inventory-service
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    command: start-dev
+    ports:
+      - "8180:8080"
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+
 volumes:
   catalog-data:
   inventory-data:
+  keycloak-data:
