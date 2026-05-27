@@ -6,10 +6,11 @@ Built with a focus on clean architecture, it separates concerns across distinct 
 Designed as a portfolio project, go-folio demonstrates idiomatic Go patterns: dependency injection without frameworks, layered runtime composition, database-backed seeding, and a minimal but production-conscious main.
 
 # high level architecture
-
+```
 React SPA
     │
     ▼ REST/JSON (HTTPS)
 API Gateway (Go) ----> Auth/Key Clock
     ├──→ Catalog Service  (gRPC interno)
     └──→ Inventory Service (gRPC interno)
+```
