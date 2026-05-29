@@ -9,13 +9,18 @@ import (
 )
 
 func registerRoutes(r chi.Router, rt *runtime.GatewayRuntime, logger *slog.Logger) {
+	// ── Public routes ─────────────────────────────────────────────────────────
 	NewProductsHandler(rt, logger).RegisterRoutes(r)
 
-	// ── Admin routes (not yet implemented) ────────────────────────────────────
-	r.Get("/admin/products", notImplemented)
-	r.Post("/admin/products", notImplemented)
-	r.Patch("/admin/products/{sku}", notImplemented)
-	r.Put("/admin/inventory/{sku}", notImplemented)
+	// ── Admin routes — require a valid JWT with the "admin" realm role ────────
+	r.Group(func(r chi.Router) {
+		r.Use(rt.Auth.RequireAuth)
+		r.Use(rt.Auth.RequireRole("admin"))
+		r.Get("/admin/products", notImplemented)
+		r.Post("/admin/products", notImplemented)
+		r.Patch("/admin/products/{sku}", notImplemented)
+		r.Put("/admin/inventory/{sku}", notImplemented)
+	})
 }
 
 func notImplemented(w http.ResponseWriter, _ *http.Request) {

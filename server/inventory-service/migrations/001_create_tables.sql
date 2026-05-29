@@ -5,9 +5,9 @@ CREATE TABLE IF NOT EXISTS stock (
 );
 
 CREATE TABLE IF NOT EXISTS reservations (
-    id         TEXT     PRIMARY KEY,
-    sku        TEXT     NOT NULL REFERENCES stock(sku),
-    quantity   INTEGER  NOT NULL,
-    order_id   TEXT     NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    id         TEXT        PRIMARY KEY,
+    sku        TEXT        NOT NULL REFERENCES stock(sku),
+    quantity   INTEGER     NOT NULL,
+    order_id   TEXT        NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );

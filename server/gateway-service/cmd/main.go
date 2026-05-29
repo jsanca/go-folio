@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/jsanca/go-folio/gateway-service/internal/config"
@@ -13,9 +14,13 @@ func main() {
 	cfg := config.Load()
 	logger := observability.NewLogger()
 
-	rt, err := runtime.NewGatewayRuntime(cfg)
+	rt, err := runtime.NewGatewayRuntime(context.Background(), cfg)
 	if err != nil {
 		log.Fatalf("init runtime: %v", err)
+	}
+
+	if rt.Auth.Permissive() {
+		logger.Warn("KEYCLOAK_URL not set — auth middleware is in permissive mode, all requests pass through")
 	}
 
 	composite := runtime.NewComposite(rt)

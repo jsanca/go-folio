@@ -3,30 +3,42 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 
 	"github.com/jsanca/go-folio/gateway-service/internal/clients"
 	"github.com/jsanca/go-folio/gateway-service/internal/config"
+	"github.com/jsanca/go-folio/gateway-service/internal/middleware"
 )
 
 // GatewayRuntime holds all downstream clients for the gateway domain.
 type GatewayRuntime struct {
 	Catalog           *clients.CatalogClient
 	Inventory         *clients.InventoryClient
+	Auth              *middleware.Verifier
 	LowStockThreshold int
 }
 
 // NewGatewayRuntime creates and connects all downstream clients.
-// The gRPC connection to inventory-service is lazy; no network traffic occurs until the first RPC.
-func NewGatewayRuntime(cfg config.Config) (*GatewayRuntime, error) {
+// ctx is used for the OIDC provider discovery request to Keycloak.
+// The gRPC connection to inventory-service is lazy — no network traffic until the first RPC.
+func NewGatewayRuntime(ctx context.Context, cfg config.Config) (*GatewayRuntime, error) {
 	catalog := clients.NewCatalogClient(cfg.CatalogURL)
+
 	inventory, err := clients.NewInventoryClient(cfg.InventoryAddr)
 	if err != nil {
 		return nil, err
 	}
+
+	auth, err := middleware.NewVerifier(ctx, cfg.KeycloakURL, cfg.KeycloakRealm)
+	if err != nil {
+		return nil, err
+	}
+
 	return &GatewayRuntime{
 		Catalog:           catalog,
 		Inventory:         inventory,
+		Auth:              auth,
 		LowStockThreshold: cfg.LowStockThreshold,
 	}, nil
 }

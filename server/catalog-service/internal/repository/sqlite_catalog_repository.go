@@ -4,26 +4,32 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jsanca/go-folio/internal/domain"
 )
 
-// SQLiteCatalogRepository implements CatalogProductRepository,
-// ProductVariantRepository, and ProductImageRepository over SQLite.
-type SQLiteCatalogRepository struct {
+// PostgresCatalogRepository implements CatalogProductRepository,
+// ProductVariantRepository, ProductImageRepository, and CatalogSyncRepository
+// over a PostgreSQL database.
+type PostgresCatalogRepository struct {
 	db *sql.DB
 }
 
-func NewSQLiteCatalogRepository(db *sql.DB) *SQLiteCatalogRepository {
-	return &SQLiteCatalogRepository{db: db}
+// NewSQLiteCatalogRepository creates a PostgresCatalogRepository backed by the given connection.
+// The name is kept for backwards compatibility with existing call sites.
+func NewSQLiteCatalogRepository(db *sql.DB) *PostgresCatalogRepository {
+	return &PostgresCatalogRepository{db: db}
 }
 
 // ── CatalogProductRepository ────────────────────────────────────────────────
 
-func (r *SQLiteCatalogRepository) CreateProduct(ctx context.Context, p *domain.Product) (*domain.Product, error) {
+// CreateProduct inserts a new product and returns the persisted record.
+func (r *PostgresCatalogRepository) CreateProduct(ctx context.Context, p *domain.Product) (*domain.Product, error) {
 	tags, err := json.Marshal(tagsOrEmpty(p.Tags))
 	if err != nil {
 		return nil, fmt.Errorf("marshal tags: %w", err)
@@ -34,42 +40,41 @@ func (r *SQLiteCatalogRepository) CreateProduct(ctx context.Context, p *domain.P
 			(product_code, external_product_id, title, slug, short_description,
 			 description, additional_info, department, category, subcategory,
 			 tags, base_sku, active)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		RETURNING id`
 
-	res, err := r.db.ExecContext(ctx, q,
+	var id int64
+	err = r.db.QueryRowContext(ctx, q,
 		p.ProductCode, nullableString(p.ExternalProductID), p.Title, p.Slug,
 		p.ShortDescription, p.Description, p.AdditionalInfo,
 		p.Department, p.Category, p.Subcategory,
-		string(tags), nullableString(p.BaseSKU), boolToInt(p.Active),
-	)
+		string(tags), nullableString(p.BaseSKU), p.Active,
+	).Scan(&id)
 	if err != nil {
-		return nil, mapCatalogSQLiteError(err, "create product")
-	}
-
-	id, err := res.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("last insert id: %w", err)
+		return nil, mapCatalogPgError(err, "create product")
 	}
 	return r.GetProductByID(ctx, id)
 }
 
-func (r *SQLiteCatalogRepository) GetProductByID(ctx context.Context, id int64) (*domain.Product, error) {
+// GetProductByID returns the product with the given id.
+func (r *PostgresCatalogRepository) GetProductByID(ctx context.Context, id int64) (*domain.Product, error) {
 	const q = `
 		SELECT id, product_code, external_product_id, title, slug,
 		       short_description, description, additional_info,
 		       department, category, subcategory, tags, base_sku,
 		       active, created_at, updated_at, last_synced_at
-		FROM catalog_products WHERE id = ?`
+		FROM catalog_products WHERE id = $1`
 
 	row := r.db.QueryRowContext(ctx, q, id)
 	p, err := scanCatalogProduct(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrProductNotFound
 	}
 	return p, err
 }
 
-func (r *SQLiteCatalogRepository) ListProducts(ctx context.Context) ([]domain.Product, error) {
+// ListProducts returns all products ordered by id.
+func (r *PostgresCatalogRepository) ListProducts(ctx context.Context) ([]domain.Product, error) {
 	const q = `
 		SELECT id, product_code, external_product_id, title, slug,
 		       short_description, description, additional_info,
@@ -96,35 +101,34 @@ func (r *SQLiteCatalogRepository) ListProducts(ctx context.Context) ([]domain.Pr
 
 // ── ProductVariantRepository ─────────────────────────────────────────────────
 
-func (r *SQLiteCatalogRepository) AddVariant(ctx context.Context, v *domain.ProductVariant) (*domain.ProductVariant, error) {
+// AddVariant inserts a new variant and returns the persisted record.
+func (r *PostgresCatalogRepository) AddVariant(ctx context.Context, v *domain.ProductVariant) (*domain.ProductVariant, error) {
 	const q = `
 		INSERT INTO product_variants
 			(product_id, sku, external_variant_id, color_slug, color_name,
 			 primary_color_name, secondary_color_name, primary_color_hex, secondary_color_hex,
 			 retail_price_cents, sale_price_cents, currency,
 			 stock_quantity, stock_status, warehouse_code, variant_image_url, active)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+		RETURNING id`
 
-	res, err := r.db.ExecContext(ctx, q,
+	var id int64
+	err := r.db.QueryRowContext(ctx, q,
 		v.ProductID, v.SKU, nullableString(v.ExternalVariantID),
 		v.ColorSlug, v.ColorName, v.PrimaryColorName, v.SecondaryColorName,
 		v.PrimaryColorHex, v.SecondaryColorHex,
 		v.RetailPrice.AmountCents, nullableInt64(v.SalePrice),
 		v.Currency, v.StockQuantity, string(v.StockStatus),
-		v.WarehouseCode, v.VariantImageURL, boolToInt(v.Active),
-	)
+		v.WarehouseCode, v.VariantImageURL, v.Active,
+	).Scan(&id)
 	if err != nil {
-		return nil, mapCatalogSQLiteError(err, "add variant")
-	}
-
-	id, err := res.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("last insert id: %w", err)
+		return nil, mapCatalogPgError(err, "add variant")
 	}
 	return r.GetVariantByID(ctx, id)
 }
 
-func (r *SQLiteCatalogRepository) GetVariantBySKU(ctx context.Context, sku string) (*domain.ProductVariant, error) {
+// GetVariantBySKU returns the variant with the given SKU.
+func (r *PostgresCatalogRepository) GetVariantBySKU(ctx context.Context, sku string) (*domain.ProductVariant, error) {
 	const q = `
 		SELECT id, product_id, sku, external_variant_id,
 		       color_slug, color_name, primary_color_name, secondary_color_name,
@@ -132,17 +136,18 @@ func (r *SQLiteCatalogRepository) GetVariantBySKU(ctx context.Context, sku strin
 		       retail_price_cents, sale_price_cents, currency,
 		       stock_quantity, stock_status, warehouse_code, variant_image_url,
 		       active, created_at, updated_at, last_synced_at
-		FROM product_variants WHERE sku = ?`
+		FROM product_variants WHERE sku = $1`
 
 	row := r.db.QueryRowContext(ctx, q, sku)
 	v, err := scanCatalogVariant(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrVariantNotFound
 	}
 	return v, err
 }
 
-func (r *SQLiteCatalogRepository) GetVariantByID(ctx context.Context, id int64) (*domain.ProductVariant, error) {
+// GetVariantByID returns the variant with the given id.
+func (r *PostgresCatalogRepository) GetVariantByID(ctx context.Context, id int64) (*domain.ProductVariant, error) {
 	const q = `
 		SELECT id, product_id, sku, external_variant_id,
 		       color_slug, color_name, primary_color_name, secondary_color_name,
@@ -150,18 +155,19 @@ func (r *SQLiteCatalogRepository) GetVariantByID(ctx context.Context, id int64) 
 		       retail_price_cents, sale_price_cents, currency,
 		       stock_quantity, stock_status, warehouse_code, variant_image_url,
 		       active, created_at, updated_at, last_synced_at
-		FROM product_variants WHERE id = ?`
+		FROM product_variants WHERE id = $1`
 
 	row := r.db.QueryRowContext(ctx, q, id)
 	v, err := scanCatalogVariant(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrVariantNotFound
 	}
 	return v, err
 }
 
-func (r *SQLiteCatalogRepository) UpdateVariantPricing(ctx context.Context, sku string, retail domain.Money, sale *domain.Money, currency string) error {
-	const q = `UPDATE product_variants SET retail_price_cents = ?, sale_price_cents = ?, currency = ?, updated_at = ? WHERE sku = ?`
+// UpdateVariantPricing updates price fields for the variant identified by sku.
+func (r *PostgresCatalogRepository) UpdateVariantPricing(ctx context.Context, sku string, retail domain.Money, sale *domain.Money, currency string) error {
+	const q = `UPDATE product_variants SET retail_price_cents = $1, sale_price_cents = $2, currency = $3, updated_at = $4 WHERE sku = $5`
 	res, err := r.db.ExecContext(ctx, q, retail.AmountCents, nullableInt64(sale), currency, time.Now().UTC(), sku)
 	if err != nil {
 		return fmt.Errorf("update pricing: %w", err)
@@ -173,7 +179,8 @@ func (r *SQLiteCatalogRepository) UpdateVariantPricing(ctx context.Context, sku 
 	return nil
 }
 
-func (r *SQLiteCatalogRepository) ListVariantsByProductID(ctx context.Context, productID int64) ([]domain.ProductVariant, error) {
+// ListVariantsByProductID returns all variants for the given product, ordered by id.
+func (r *PostgresCatalogRepository) ListVariantsByProductID(ctx context.Context, productID int64) ([]domain.ProductVariant, error) {
 	const q = `
 		SELECT id, product_id, sku, external_variant_id,
 		       color_slug, color_name, primary_color_name, secondary_color_name,
@@ -181,7 +188,7 @@ func (r *SQLiteCatalogRepository) ListVariantsByProductID(ctx context.Context, p
 		       retail_price_cents, sale_price_cents, currency,
 		       stock_quantity, stock_status, warehouse_code, variant_image_url,
 		       active, created_at, updated_at, last_synced_at
-		FROM product_variants WHERE product_id = ? ORDER BY id`
+		FROM product_variants WHERE product_id = $1 ORDER BY id`
 
 	rows, err := r.db.QueryContext(ctx, q, productID)
 	if err != nil {
@@ -202,44 +209,43 @@ func (r *SQLiteCatalogRepository) ListVariantsByProductID(ctx context.Context, p
 
 // ── ProductImageRepository ───────────────────────────────────────────────────
 
-func (r *SQLiteCatalogRepository) AddImage(ctx context.Context, img *domain.ProductImage) (*domain.ProductImage, error) {
+// AddImage inserts a new image and returns the persisted record.
+func (r *PostgresCatalogRepository) AddImage(ctx context.Context, img *domain.ProductImage) (*domain.ProductImage, error) {
 	const q = `
 		INSERT INTO product_images (product_id, variant_id, url, alt_text, sort_order, is_main, width, height)
-		VALUES (?,?,?,?,?,?,?,?)`
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		RETURNING id`
 
-	res, err := r.db.ExecContext(ctx, q,
+	var id int64
+	err := r.db.QueryRowContext(ctx, q,
 		img.ProductID, img.VariantID, img.URL, img.AltText,
-		img.SortOrder, boolToInt(img.IsMain), img.Width, img.Height,
-	)
+		img.SortOrder, img.IsMain, img.Width, img.Height,
+	).Scan(&id)
 	if err != nil {
 		return nil, fmt.Errorf("add image: %w", err)
 	}
-
-	id, err := res.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("last insert id: %w", err)
-	}
-
 	saved := *img
 	saved.ID = id
 	return &saved, nil
 }
 
-func (r *SQLiteCatalogRepository) ListImagesByProductID(ctx context.Context, productID int64) ([]domain.ProductImage, error) {
+// ListImagesByProductID returns all images for the given product, ordered by sort_order then id.
+func (r *PostgresCatalogRepository) ListImagesByProductID(ctx context.Context, productID int64) ([]domain.ProductImage, error) {
 	const q = `
 		SELECT id, product_id, variant_id, url, alt_text, sort_order, is_main, width, height, created_at, updated_at
-		FROM product_images WHERE product_id = ? ORDER BY sort_order, id`
+		FROM product_images WHERE product_id = $1 ORDER BY sort_order, id`
 	return r.queryImages(ctx, q, productID)
 }
 
-func (r *SQLiteCatalogRepository) ListImagesByVariantID(ctx context.Context, variantID int64) ([]domain.ProductImage, error) {
+// ListImagesByVariantID returns all images for the given variant, ordered by sort_order then id.
+func (r *PostgresCatalogRepository) ListImagesByVariantID(ctx context.Context, variantID int64) ([]domain.ProductImage, error) {
 	const q = `
 		SELECT id, product_id, variant_id, url, alt_text, sort_order, is_main, width, height, created_at, updated_at
-		FROM product_images WHERE variant_id = ? ORDER BY sort_order, id`
+		FROM product_images WHERE variant_id = $1 ORDER BY sort_order, id`
 	return r.queryImages(ctx, q, variantID)
 }
 
-func (r *SQLiteCatalogRepository) queryImages(ctx context.Context, q string, arg any) ([]domain.ProductImage, error) {
+func (r *PostgresCatalogRepository) queryImages(ctx context.Context, q string, arg any) ([]domain.ProductImage, error) {
 	rows, err := r.db.QueryContext(ctx, q, arg)
 	if err != nil {
 		return nil, fmt.Errorf("query images: %w", err)
@@ -259,17 +265,21 @@ func (r *SQLiteCatalogRepository) queryImages(ctx context.Context, q string, arg
 
 // ── CatalogSyncRepository ────────────────────────────────────────────────────
 
-func (r *SQLiteCatalogRepository) ListProductProjectionPage(ctx context.Context, q domain.SyncQuery) ([]domain.ProductProjection, bool, error) {
+// ListProductProjectionPage returns one cursor-paginated page of product projections.
+func (r *PostgresCatalogRepository) ListProductProjectionPage(ctx context.Context, q domain.SyncQuery) ([]domain.ProductProjection, bool, error) {
 	var conds []string
 	var args []any
+	n := 1
 
 	if q.UpdatedSince != nil {
-		conds = append(conds, "updated_at > ?")
+		conds = append(conds, fmt.Sprintf("updated_at > $%d", n))
 		args = append(args, q.UpdatedSince.UTC())
+		n++
 	}
 	if q.AfterAt != nil {
-		conds = append(conds, "(updated_at > ? OR (updated_at = ? AND id > ?))")
+		conds = append(conds, fmt.Sprintf("(updated_at > $%d OR (updated_at = $%d AND id > $%d))", n, n+1, n+2))
 		args = append(args, q.AfterAt.UTC(), q.AfterAt.UTC(), q.AfterID)
+		n += 3
 	}
 
 	where := ""
@@ -284,7 +294,7 @@ func (r *SQLiteCatalogRepository) ListProductProjectionPage(ctx context.Context,
 		       department, category, subcategory, tags, base_sku,
 		       active, created_at, updated_at, last_synced_at
 		FROM catalog_products%s
-		ORDER BY updated_at ASC, id ASC LIMIT ?`, where)
+		ORDER BY updated_at ASC, id ASC LIMIT $%d`, where, n)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -346,17 +356,21 @@ func (r *SQLiteCatalogRepository) ListProductProjectionPage(ctx context.Context,
 	return projections, hasNext, nil
 }
 
-func (r *SQLiteCatalogRepository) ListVariantInventoryPage(ctx context.Context, q domain.SyncQuery) ([]domain.VariantInventoryRecord, bool, error) {
+// ListVariantInventoryPage returns one cursor-paginated page of variant inventory records.
+func (r *PostgresCatalogRepository) ListVariantInventoryPage(ctx context.Context, q domain.SyncQuery) ([]domain.VariantInventoryRecord, bool, error) {
 	var conds []string
 	var args []any
+	n := 1
 
 	if q.UpdatedSince != nil {
-		conds = append(conds, "pv.updated_at > ?")
+		conds = append(conds, fmt.Sprintf("pv.updated_at > $%d", n))
 		args = append(args, q.UpdatedSince.UTC())
+		n++
 	}
 	if q.AfterAt != nil {
-		conds = append(conds, "(pv.updated_at > ? OR (pv.updated_at = ? AND pv.id > ?))")
+		conds = append(conds, fmt.Sprintf("(pv.updated_at > $%d OR (pv.updated_at = $%d AND pv.id > $%d))", n, n+1, n+2))
 		args = append(args, q.AfterAt.UTC(), q.AfterAt.UTC(), q.AfterID)
+		n += 3
 	}
 
 	where := ""
@@ -372,7 +386,7 @@ func (r *SQLiteCatalogRepository) ListVariantInventoryPage(ctx context.Context, 
 		       pv.updated_at, pv.last_synced_at
 		FROM product_variants pv
 		JOIN catalog_products cp ON cp.id = pv.product_id%s
-		ORDER BY pv.updated_at ASC, pv.id ASC LIMIT ?`, where)
+		ORDER BY pv.updated_at ASC, pv.id ASC LIMIT $%d`, where, n)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -384,18 +398,16 @@ func (r *SQLiteCatalogRepository) ListVariantInventoryPage(ctx context.Context, 
 	for rows.Next() {
 		var rec domain.VariantInventoryRecord
 		var saleCents sql.NullInt64
-		var activeInt int
 		var lastSynced sql.NullTime
 
 		if err := rows.Scan(
 			&rec.ProductCode, &rec.ProductID, &rec.VariantID, &rec.SKU,
 			&rec.RetailPrice.AmountCents, &saleCents, &rec.Currency,
-			&rec.StockQuantity, &rec.StockStatus, &activeInt,
+			&rec.StockQuantity, &rec.StockStatus, &rec.Active,
 			&rec.UpdatedAt, &lastSynced,
 		); err != nil {
 			return nil, false, err
 		}
-		rec.Active = activeInt != 0
 		if saleCents.Valid {
 			m := domain.Money{AmountCents: saleCents.Int64}
 			rec.SalePrice = &m
@@ -420,7 +432,7 @@ func (r *SQLiteCatalogRepository) ListVariantInventoryPage(ctx context.Context, 
 	return records, hasNext, nil
 }
 
-func (r *SQLiteCatalogRepository) loadVariantsForProducts(ctx context.Context, ids []int64) (map[int64][]domain.ProductVariant, error) {
+func (r *PostgresCatalogRepository) loadVariantsForProducts(ctx context.Context, ids []int64) (map[int64][]domain.ProductVariant, error) {
 	query := fmt.Sprintf(`
 		SELECT id, product_id, sku, external_variant_id,
 		       color_slug, color_name, primary_color_name, secondary_color_name,
@@ -428,7 +440,7 @@ func (r *SQLiteCatalogRepository) loadVariantsForProducts(ctx context.Context, i
 		       retail_price_cents, sale_price_cents, currency,
 		       stock_quantity, stock_status, warehouse_code, variant_image_url,
 		       active, created_at, updated_at, last_synced_at
-		FROM product_variants WHERE product_id IN %s ORDER BY id`, inClause(len(ids)))
+		FROM product_variants WHERE product_id IN %s ORDER BY id`, pgInClause(1, len(ids)))
 
 	rows, err := r.db.QueryContext(ctx, query, int64sToAny(ids)...)
 	if err != nil {
@@ -447,10 +459,10 @@ func (r *SQLiteCatalogRepository) loadVariantsForProducts(ctx context.Context, i
 	return result, rows.Err()
 }
 
-func (r *SQLiteCatalogRepository) loadImagesForProducts(ctx context.Context, ids []int64) (map[int64][]domain.ProductImage, error) {
+func (r *PostgresCatalogRepository) loadImagesForProducts(ctx context.Context, ids []int64) (map[int64][]domain.ProductImage, error) {
 	query := fmt.Sprintf(`
 		SELECT id, product_id, variant_id, url, alt_text, sort_order, is_main, width, height, created_at, updated_at
-		FROM product_images WHERE product_id IN %s ORDER BY sort_order, id`, inClause(len(ids)))
+		FROM product_images WHERE product_id IN %s ORDER BY sort_order, id`, pgInClause(1, len(ids)))
 
 	rows, err := r.db.QueryContext(ctx, query, int64sToAny(ids)...)
 	if err != nil {
@@ -469,10 +481,12 @@ func (r *SQLiteCatalogRepository) loadImagesForProducts(ctx context.Context, ids
 	return result, rows.Err()
 }
 
-func inClause(n int) string {
+// pgInClause builds a PostgreSQL IN clause starting at parameter $start.
+// e.g. pgInClause(1, 3) → "($1,$2,$3)"
+func pgInClause(start, n int) string {
 	placeholders := make([]string, n)
 	for i := range placeholders {
-		placeholders[i] = "?"
+		placeholders[i] = fmt.Sprintf("$%d", start+i)
 	}
 	return "(" + strings.Join(placeholders, ",") + ")"
 }
@@ -496,14 +510,13 @@ func scanCatalogProduct(s catalogScanner) (*domain.Product, error) {
 	var externalID sql.NullString
 	var baseSKU sql.NullString
 	var tagsJSON string
-	var activeInt int
 	var lastSynced sql.NullTime
 
 	err := s.Scan(
 		&p.ID, &p.ProductCode, &externalID, &p.Title, &p.Slug,
 		&p.ShortDescription, &p.Description, &p.AdditionalInfo,
 		&p.Department, &p.Category, &p.Subcategory, &tagsJSON, &baseSKU,
-		&activeInt, &p.CreatedAt, &p.UpdatedAt, &lastSynced,
+		&p.Active, &p.CreatedAt, &p.UpdatedAt, &lastSynced,
 	)
 	if err != nil {
 		return nil, err
@@ -511,7 +524,6 @@ func scanCatalogProduct(s catalogScanner) (*domain.Product, error) {
 
 	p.ExternalProductID = externalID.String
 	p.BaseSKU = baseSKU.String
-	p.Active = activeInt != 0
 	if lastSynced.Valid {
 		t := lastSynced.Time
 		p.LastSyncedAt = &t
@@ -526,7 +538,6 @@ func scanCatalogVariant(s catalogScanner) (*domain.ProductVariant, error) {
 	var v domain.ProductVariant
 	var externalID sql.NullString
 	var saleCents sql.NullInt64
-	var activeInt int
 	var lastSynced sql.NullTime
 
 	err := s.Scan(
@@ -535,14 +546,13 @@ func scanCatalogVariant(s catalogScanner) (*domain.ProductVariant, error) {
 		&v.PrimaryColorHex, &v.SecondaryColorHex,
 		&v.RetailPrice.AmountCents, &saleCents, &v.Currency,
 		&v.StockQuantity, &v.StockStatus, &v.WarehouseCode, &v.VariantImageURL,
-		&activeInt, &v.CreatedAt, &v.UpdatedAt, &lastSynced,
+		&v.Active, &v.CreatedAt, &v.UpdatedAt, &lastSynced,
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	v.ExternalVariantID = externalID.String
-	v.Active = activeInt != 0
 	if saleCents.Valid {
 		m := domain.Money{AmountCents: saleCents.Int64}
 		v.SalePrice = &m
@@ -558,11 +568,10 @@ func scanCatalogImage(s catalogScanner) (*domain.ProductImage, error) {
 	var img domain.ProductImage
 	var variantID sql.NullInt64
 	var width, height sql.NullInt64
-	var isMainInt int
 
 	err := s.Scan(
 		&img.ID, &img.ProductID, &variantID, &img.URL, &img.AltText,
-		&img.SortOrder, &isMainInt, &width, &height,
+		&img.SortOrder, &img.IsMain, &width, &height,
 		&img.CreatedAt, &img.UpdatedAt,
 	)
 	if err != nil {
@@ -581,7 +590,6 @@ func scanCatalogImage(s catalogScanner) (*domain.ProductImage, error) {
 		h := int(height.Int64)
 		img.Height = &h
 	}
-	img.IsMain = isMainInt != 0
 	return &img, nil
 }
 
@@ -601,13 +609,6 @@ func nullableInt64(m *domain.Money) any {
 	return m.AmountCents
 }
 
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}
-
 func tagsOrEmpty(tags []string) []string {
 	if tags == nil {
 		return []string{}
@@ -615,16 +616,17 @@ func tagsOrEmpty(tags []string) []string {
 	return tags
 }
 
-func mapCatalogSQLiteError(err error, op string) error {
-	msg := err.Error()
-	if strings.Contains(msg, "UNIQUE constraint failed: catalog_products.product_code") {
-		return ErrDuplicateProductCode
-	}
-	if strings.Contains(msg, "UNIQUE constraint failed: catalog_products.slug") {
-		return ErrDuplicateSlug
-	}
-	if strings.Contains(msg, "UNIQUE constraint failed: product_variants.sku") {
-		return ErrDuplicateSKU
+func mapCatalogPgError(err error, op string) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		switch pgErr.ConstraintName {
+		case "catalog_products_product_code_key":
+			return ErrDuplicateProductCode
+		case "catalog_products_slug_key":
+			return ErrDuplicateSlug
+		case "product_variants_sku_key":
+			return ErrDuplicateSKU
+		}
 	}
 	return fmt.Errorf("%s: %w", op, err)
 }

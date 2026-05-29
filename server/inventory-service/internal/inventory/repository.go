@@ -46,98 +46,99 @@ type Repository interface {
 	WithTx(tx *sql.Tx) Repository
 }
 
-// SQLiteRepository implements Repository using a *sql.DB connection.
-type SQLiteRepository struct {
+// PostgresRepository implements Repository using a *sql.DB connection.
+type PostgresRepository struct {
 	db *sql.DB
 }
 
-// NewSQLiteRepository creates a Repository backed by the given SQLite connection.
-func NewSQLiteRepository(db *sql.DB) *SQLiteRepository {
-	return &SQLiteRepository{db: db}
+// NewSQLiteRepository creates a Repository backed by the given connection.
+// The name is kept for backwards compatibility with existing call sites.
+func NewSQLiteRepository(db *sql.DB) *PostgresRepository {
+	return &PostgresRepository{db: db}
 }
 
 // WithTx returns a Repository that executes within tx.
-func (r *SQLiteRepository) WithTx(tx *sql.Tx) Repository {
-	return &sqliteTxRepository{tx: tx}
+func (r *PostgresRepository) WithTx(tx *sql.Tx) Repository {
+	return &pgTxRepository{tx: tx}
 }
 
 // GetStock returns the current stock record for the given SKU.
-func (r *SQLiteRepository) GetStock(ctx context.Context, sku string) (*Stock, error) {
+func (r *PostgresRepository) GetStock(ctx context.Context, sku string) (*Stock, error) {
 	return queryStock(ctx, r.db, sku)
 }
 
 // AdjustStock applies delta to available stock for sku.
-func (r *SQLiteRepository) AdjustStock(ctx context.Context, sku string, delta int32) (*Stock, error) {
+func (r *PostgresRepository) AdjustStock(ctx context.Context, sku string, delta int32) (*Stock, error) {
 	return adjustStock(ctx, r.db, sku, delta)
 }
 
 // ReserveStock moves quantity from available to reserved and records a reservation.
-func (r *SQLiteRepository) ReserveStock(ctx context.Context, sku string, quantity int32, orderID string) (*Reservation, error) {
+func (r *PostgresRepository) ReserveStock(ctx context.Context, sku string, quantity int32, orderID string) (*Reservation, error) {
 	return reserveStock(ctx, r.db, sku, quantity, orderID)
 }
 
 // ReleaseStock cancels a reservation and returns its quantity to available.
-func (r *SQLiteRepository) ReleaseStock(ctx context.Context, reservationID string) (*Stock, error) {
+func (r *PostgresRepository) ReleaseStock(ctx context.Context, reservationID string) (*Stock, error) {
 	return releaseStock(ctx, r.db, reservationID)
 }
 
 // SeedSKU inserts a SKU with initial stock if it does not already exist.
-func (r *SQLiteRepository) SeedSKU(ctx context.Context, sku string, available int32) error {
+func (r *PostgresRepository) SeedSKU(ctx context.Context, sku string, available int32) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO stock (sku, available, reserved) VALUES (?, ?, 0)`,
+		`INSERT INTO stock (sku, available, reserved) VALUES ($1, $2, 0) ON CONFLICT DO NOTHING`,
 		sku, available,
 	)
 	return err
 }
 
 // HasAnyStock reports whether any stock records exist.
-func (r *SQLiteRepository) HasAnyStock(ctx context.Context) (bool, error) {
+func (r *PostgresRepository) HasAnyStock(ctx context.Context) (bool, error) {
 	var count int
 	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM stock`).Scan(&count)
 	return count > 0, err
 }
 
-// sqliteTxRepository implements Repository using a *sql.Tx.
-type sqliteTxRepository struct {
+// pgTxRepository implements Repository using a *sql.Tx.
+type pgTxRepository struct {
 	tx *sql.Tx
 }
 
 // WithTx returns a Repository bound to the given tx, replacing the current one.
-func (r *sqliteTxRepository) WithTx(tx *sql.Tx) Repository {
-	return &sqliteTxRepository{tx: tx}
+func (r *pgTxRepository) WithTx(tx *sql.Tx) Repository {
+	return &pgTxRepository{tx: tx}
 }
 
 // GetStock returns the current stock record within the transaction.
-func (r *sqliteTxRepository) GetStock(ctx context.Context, sku string) (*Stock, error) {
+func (r *pgTxRepository) GetStock(ctx context.Context, sku string) (*Stock, error) {
 	return queryStock(ctx, r.tx, sku)
 }
 
 // AdjustStock applies delta to available stock within the transaction.
-func (r *sqliteTxRepository) AdjustStock(ctx context.Context, sku string, delta int32) (*Stock, error) {
+func (r *pgTxRepository) AdjustStock(ctx context.Context, sku string, delta int32) (*Stock, error) {
 	return adjustStock(ctx, r.tx, sku, delta)
 }
 
 // ReserveStock moves quantity to reserved within the transaction.
-func (r *sqliteTxRepository) ReserveStock(ctx context.Context, sku string, quantity int32, orderID string) (*Reservation, error) {
+func (r *pgTxRepository) ReserveStock(ctx context.Context, sku string, quantity int32, orderID string) (*Reservation, error) {
 	return reserveStock(ctx, r.tx, sku, quantity, orderID)
 }
 
 // ReleaseStock cancels a reservation within the transaction.
-func (r *sqliteTxRepository) ReleaseStock(ctx context.Context, reservationID string) (*Stock, error) {
+func (r *pgTxRepository) ReleaseStock(ctx context.Context, reservationID string) (*Stock, error) {
 	return releaseStock(ctx, r.tx, reservationID)
 }
 
 // SeedSKU inserts a SKU within the transaction.
-func (r *sqliteTxRepository) SeedSKU(ctx context.Context, sku string, available int32) error {
+func (r *pgTxRepository) SeedSKU(ctx context.Context, sku string, available int32) error {
 	_, err := r.tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO stock (sku, available, reserved) VALUES (?, ?, 0)`,
+		`INSERT INTO stock (sku, available, reserved) VALUES ($1, $2, 0) ON CONFLICT DO NOTHING`,
 		sku, available,
 	)
 	return err
 }
 
 // HasAnyStock reports whether any stock records exist within the transaction.
-func (r *sqliteTxRepository) HasAnyStock(ctx context.Context) (bool, error) {
+func (r *pgTxRepository) HasAnyStock(ctx context.Context) (bool, error) {
 	var count int
 	err := r.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM stock`).Scan(&count)
 	return count > 0, err
@@ -152,7 +153,7 @@ type querier interface {
 func queryStock(ctx context.Context, q querier, sku string) (*Stock, error) {
 	var s Stock
 	err := q.QueryRowContext(ctx,
-		`SELECT sku, available, reserved FROM stock WHERE sku = ?`, sku,
+		`SELECT sku, available, reserved FROM stock WHERE sku = $1`, sku,
 	).Scan(&s.SKU, &s.Available, &s.Reserved)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: sku=%s", ErrNotFound, sku)
@@ -173,7 +174,7 @@ func adjustStock(ctx context.Context, q querier, sku string, delta int32) (*Stoc
 		return nil, fmt.Errorf("%w: sku=%s delta=%d available=%d", ErrInsufficientStock, sku, delta, s.Available)
 	}
 	if _, err = q.ExecContext(ctx,
-		`UPDATE stock SET available = ? WHERE sku = ?`, newAvailable, sku,
+		`UPDATE stock SET available = $1 WHERE sku = $2`, newAvailable, sku,
 	); err != nil {
 		return nil, fmt.Errorf("update stock: %w", err)
 	}
@@ -191,13 +192,13 @@ func reserveStock(ctx context.Context, q querier, sku string, quantity int32, or
 	}
 	id := newID()
 	if _, err = q.ExecContext(ctx,
-		`INSERT INTO reservations (id, sku, quantity, order_id) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO reservations (id, sku, quantity, order_id) VALUES ($1, $2, $3, $4)`,
 		id, sku, quantity, orderID,
 	); err != nil {
 		return nil, fmt.Errorf("insert reservation: %w", err)
 	}
 	if _, err = q.ExecContext(ctx,
-		`UPDATE stock SET available = available - ?, reserved = reserved + ? WHERE sku = ?`,
+		`UPDATE stock SET available = available - $1, reserved = reserved + $2 WHERE sku = $3`,
 		quantity, quantity, sku,
 	); err != nil {
 		return nil, fmt.Errorf("update stock for reserve: %w", err)
@@ -208,7 +209,7 @@ func reserveStock(ctx context.Context, q querier, sku string, quantity int32, or
 func releaseStock(ctx context.Context, q querier, reservationID string) (*Stock, error) {
 	var res Reservation
 	err := q.QueryRowContext(ctx,
-		`SELECT id, sku, quantity, order_id FROM reservations WHERE id = ?`, reservationID,
+		`SELECT id, sku, quantity, order_id FROM reservations WHERE id = $1`, reservationID,
 	).Scan(&res.ID, &res.SKU, &res.Quantity, &res.OrderID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: reservation_id=%s", ErrNotFound, reservationID)
@@ -217,13 +218,13 @@ func releaseStock(ctx context.Context, q querier, reservationID string) (*Stock,
 		return nil, fmt.Errorf("get reservation: %w", err)
 	}
 	if _, err = q.ExecContext(ctx,
-		`UPDATE stock SET available = available + ?, reserved = reserved - ? WHERE sku = ?`,
+		`UPDATE stock SET available = available + $1, reserved = reserved - $2 WHERE sku = $3`,
 		res.Quantity, res.Quantity, res.SKU,
 	); err != nil {
 		return nil, fmt.Errorf("update stock for release: %w", err)
 	}
 	if _, err = q.ExecContext(ctx,
-		`DELETE FROM reservations WHERE id = ?`, reservationID,
+		`DELETE FROM reservations WHERE id = $1`, reservationID,
 	); err != nil {
 		return nil, fmt.Errorf("delete reservation: %w", err)
 	}

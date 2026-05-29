@@ -46,22 +46,22 @@ go.work   → Workspace root
 
 ### Three services, one workspace
 
-- **catalog-service** — REST HTTP API (chi router, port 8080) backed by SQLite. Manages the leather goods product catalog for a fictional store. Serves product, variant, and image data plus cursor-paginated sync endpoints for dotCMS integration.
-- **inventory-service** — gRPC server (port 9090) backed by SQLite. Manages stock levels, reservations, and adjustments. Proto definitions live in `proto/inventory/`, generated stubs in `server/gen/`.
+- **catalog-service** — REST HTTP API (chi router, port 8080) backed by PostgreSQL (`folio_catalog` DB). Manages the leather goods product catalog for a fictional store. Serves product, variant, and image data plus cursor-paginated sync endpoints for dotCMS integration.
+- **inventory-service** — gRPC server (port 9090) backed by PostgreSQL (`folio_inventory` DB). Manages stock levels, reservations, and adjustments. Proto definitions live in `proto/inventory/`, generated stubs in `server/gen/`.
 - **gateway-service** — REST HTTP API (chi router, port 8090). Aggregates catalog and inventory into a single response. HTTP client to catalog-service, gRPC client to inventory-service. Derives `StockStatus` from inventory data using `LOW_STOCK_THRESHOLD` env var (default 5).
 
 ### Catalog-service layers (inside `internal/`)
 
 ```
 domain/       → Pure types and validation (Product, ProductVariant, Money, SyncCursor, …)
-repository/   → Interfaces (CatalogProductRepository, ProductVariantRepository, …) + SQLite impls
+repository/   → Interfaces (CatalogProductRepository, ProductVariantRepository, …) + PostgreSQL impl
 service/      → Interfaces (CatalogService, ProductService) + default implementations; cursor encoding lives here
 handler/      → HTTP handlers; thin layer that parses request, calls service, writes JSON
 runtime/      → Composition root — wires repos → services into CatalogRuntime
 server/       → Chi router setup, middleware registration (PanicRecovery, RequestLogger, Prometheus metrics)
 observability/→ Structured logging (slog), Prometheus metrics middleware, health/ready handlers
-config/       → Reads env vars; Config struct
-database/     → Opens SQLite, runs embedded migrations in order
+config/       → Reads env vars; Config struct (DATABASE_URL, PORT)
+database/     → Opens PostgreSQL via pgx/v5/stdlib, runs embedded migrations in order
 seed/         → Idempotent seed data applied at startup
 ```
 
@@ -69,7 +69,7 @@ seed/         → Idempotent seed data applied at startup
 
 ### CatalogService interface split
 
-`CatalogService` takes **four** separate repository interfaces (`CatalogProductRepository`, `ProductVariantRepository`, `ProductImageRepository`, `CatalogSyncRepository`). The SQLite implementation (`sqlite_catalog_repository.go`) satisfies all four. The split is intentional: interface segregation keeps tests minimal and service dependencies explicit.
+`CatalogService` takes **four** separate repository interfaces (`CatalogProductRepository`, `ProductVariantRepository`, `ProductImageRepository`, `CatalogSyncRepository`). The PostgreSQL implementation (`sqlite_catalog_repository.go`, struct `PostgresCatalogRepository`) satisfies all four. The split is intentional: interface segregation keeps tests minimal and service dependencies explicit.
 
 ### Sync / cursor pagination
 
@@ -80,9 +80,9 @@ seed/         → Idempotent seed data applied at startup
 ### Inventory-service layers (inside `internal/`)
 
 ```
-config/       → Env var config
-database/     → SQLite connection + migrations
-inventory/    → Domain types, SQLite repository, service (implements generated gRPC interface)
+config/       → Env var config (DATABASE_URL, PORT)
+database/     → PostgreSQL connection via pgx/v5/stdlib + migrations
+inventory/    → Domain types, PostgresRepository, service (implements generated gRPC interface)
 runtime/      → Composition root — wires repo + service into InventoryRuntime; CompositeRuntime for lifecycle
 observability/→ Structured logging (slog)
 seed/         → Startup seed data
@@ -106,7 +106,7 @@ server/       → server.go (chi setup) + routes.go + products.go (handlers) + r
 ## Go Code Quality
 
 ### Naming
-- Receivers: `svc` for `*Service`, `sqlRepo` for `*SQLiteRepository`, `txRepo` for `*sqliteTxRepository`
+- Receivers: `svc` for `*Service`, `r` for `*PostgresCatalogRepository`/`*PostgresRepository`, `tx` for transaction repos
 - Never single-letter params: `r Repository` → `repo`, `fn` ok when type is self-documenting
 - Reservations: `reservation` not `res`
 - Transactions: `tx`, never `t`
@@ -119,6 +119,33 @@ server/       → server.go (chi setup) + routes.go + products.go (handlers) + r
 - Table-driven with `t.Run`
 - Interface-based fakes in `_test.go`
 - Cover happy path + each sentinel error
+
+## Keycloak
+
+`docker compose up` is fully self-contained — no manual realm setup required.
+
+- The `folio` realm is auto-imported from `scripts/keycloak/folio-realm.json` via `--import-realm`.
+- Keycloak only imports the file when the realm does not already exist (idempotent on existing volumes).
+- Public client: `gateway` (renamed from `folio-public`). Redirect URIs: `localhost:3000/*`, `localhost:3001/*`, `localhost:8090/*`.
+- Realm roles: `admin`, `customer`.
+- Test users: `admin@folio.dev / admin123` (admin role), `customer@folio.dev / customer123` (customer role).
+- `KC_HOSTNAME_URL=http://keycloak:8080` pins the JWT issuer to the Docker-internal URL; gateway uses `SkipIssuerCheck: true` for dev.
+
+**To re-export the realm** (after changes in the Admin UI):
+```bash
+docker compose exec keycloak /opt/keycloak/bin/kc.sh export \
+  --dir /tmp/realm-export --realm folio --users realm_file
+docker compose cp keycloak:/tmp/realm-export/folio-realm.json scripts/keycloak/folio-realm.json
+```
+
+## Engineering Failure Reports
+
+When you detect a structural or architectural failure — a duplicate domain
+stack, conflicting sources of truth, a hidden coupling that caused significant
+rework — create an EFR in `docs/efr/` using the format described in
+`docs/efr/README.md`. Number sequentially (`EFR-0002.md`, …). The learning
+section of each EFR is the canonical output; absorb it into working practices
+or this file as appropriate.
 
 ## Runtime Pattern
 
