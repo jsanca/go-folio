@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-The repo is split into `server/` (Go workspace) and `client/` (React SPA). The Go workspace (`go.work`) has four modules under `server/`: `catalog-service`, `inventory-service`, `gateway-service`, and `gen`.
+The repo is split into `server/` (Go workspace) and `client/` (two React SPAs). The Go workspace (`go.work`) has four modules under `server/`: `catalog-service`, `inventory-service`, `gateway-service`, and `gen`.
 
 ```bash
 # Run tests for a single service
@@ -26,11 +26,12 @@ buf generate
 # Lint proto files
 buf lint
 
-# Start all services with Docker
+# Start all services with Docker (includes store on :3000 and admin on :3001 with hot reload)
 docker compose up --build
 
-# Client dev server
-cd client && npm install && npm run dev
+# Run a client app locally (outside Docker)
+cd client/store && npm install && npm run dev   # http://localhost:3000
+cd client/admin && npm install && npm run dev   # http://localhost:3001
 ```
 
 ## Architecture
@@ -39,7 +40,9 @@ cd client && npm install && npm run dev
 
 ```
 server/   → Go workspace: catalog-service, inventory-service, gateway-service, gen
-client/   → React SPA (Vite + React)
+client/
+├── store/  → Customer storefront (Vite + React, port 3000)
+└── admin/  → Catalog & inventory management (Vite + React, port 3001)
 proto/    → Protobuf definitions
 go.work   → Workspace root
 ```

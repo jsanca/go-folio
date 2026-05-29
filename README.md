@@ -44,6 +44,18 @@ React SPA save the token
 Gateway validates the JWT
 ```
 
+## docker topology
+```
+docker compose up
+    ├── postgres:5432          (priv)
+    ├── keycloak:8080          (priv, realm folio auto-import)
+    ├── catalog-service:8080   (priv)
+    ├── inventory-service:9090 (priv, gRPC)
+    ├── gateway-service:8090   (priv + pub)
+    ├── store:3000             (pub)
+    └── admin:3001             (pub)
+```
+
 ## Quick start
 
 ```bash

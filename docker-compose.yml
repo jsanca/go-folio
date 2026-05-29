@@ -73,6 +73,46 @@ services:
         aliases:
           - gateway-service
 
+  store:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./client/store:/app
+      - store-node-modules:/app/node_modules
+    environment:
+      - GATEWAY_URL=http://gateway-service:8090
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      gateway-service:
+        condition: service_started
+    networks:
+      public:
+        aliases:
+          - store
+
+  admin:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./client/admin:/app
+      - admin-node-modules:/app/node_modules
+    environment:
+      - GATEWAY_URL=http://gateway-service:8090
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      gateway-service:
+        condition: service_started
+    networks:
+      public:
+        aliases:
+          - admin
+
   keycloak:
     image: quay.io/keycloak/keycloak:24.0
     command: start-dev --import-realm
@@ -81,13 +121,14 @@ services:
     environment:
       - KEYCLOAK_ADMIN=admin
       - KEYCLOAK_ADMIN_PASSWORD=admin
-      - KC_HOSTNAME_URL=http://keycloak:8080
+      - KC_HOSTNAME_URL=http://localhost:8180
       - KC_HOSTNAME_ADMIN_URL=http://localhost:8180
     volumes:
       - keycloak-data:/opt/keycloak/data
       - ./scripts/keycloak/folio-realm.json:/opt/keycloak/data/import/folio-realm.json
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8080' 2>/dev/null"]
+      test:
+        ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/8080' 2>/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 15
@@ -105,3 +146,5 @@ networks:
 volumes:
   postgres-data:
   keycloak-data:
+  store-node-modules:
+  admin-node-modules:
