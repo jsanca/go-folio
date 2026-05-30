@@ -8,12 +8,13 @@ import (
 
 // Config holds all runtime configuration for the gateway service.
 type Config struct {
-	Port              string // PORT env var, default: ":8090"
-	CatalogURL        string // CATALOG_URL env var, default: "http://localhost:8080"
-	InventoryAddr     string // INVENTORY_ADDR env var, default: "localhost:9090"
-	LowStockThreshold int    // LOW_STOCK_THRESHOLD env var, default: 5
-	KeycloakURL       string // KEYCLOAK_URL env var, default: "http://localhost:8180"
-	KeycloakRealm     string // KEYCLOAK_REALM env var, default: "folio"
+	Port               string // PORT env var, default: ":8090"
+	CatalogURL         string // CATALOG_URL env var, default: "http://localhost:8080"
+	InventoryAddr      string // INVENTORY_ADDR env var, default: "localhost:9090"
+	LowStockThreshold  int    // LOW_STOCK_THRESHOLD env var, default: 5
+	KeycloakURL        string // KEYCLOAK_URL env var, default: "http://localhost:8180"
+	KeycloakRealm      string // KEYCLOAK_REALM env var, default: "folio"
+	CORSAllowedOrigins string // CORS_ALLOWED_ORIGINS env var, comma-separated; default: localhost:3000,3001
 }
 
 // Load reads configuration from environment variables and applies defaults.
@@ -46,12 +47,17 @@ func Load() Config {
 	if keycloakRealm == "" {
 		keycloakRealm = "folio"
 	}
+	corsOrigins := os.Getenv("CORS_ALLOWED_ORIGINS")
+	if corsOrigins == "" {
+		corsOrigins = "http://localhost:3000,http://localhost:3001"
+	}
 	return Config{
-		Port:              port,
-		CatalogURL:        catalogURL,
-		InventoryAddr:     inventoryAddr,
-		LowStockThreshold: threshold,
-		KeycloakURL:       keycloakURL,
-		KeycloakRealm:     keycloakRealm,
+		Port:               port,
+		CatalogURL:         catalogURL,
+		InventoryAddr:      inventoryAddr,
+		LowStockThreshold:  threshold,
+		KeycloakURL:        keycloakURL,
+		KeycloakRealm:      keycloakRealm,
+		CORSAllowedOrigins: corsOrigins,
 	}
 }

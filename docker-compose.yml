@@ -58,6 +58,7 @@ services:
       - INVENTORY_ADDR=inventory-service:9090
       - KEYCLOAK_URL=http://keycloak:8080
       - KEYCLOAK_REALM=folio
+      - CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
     depends_on:
       catalog-service:
         condition: service_started
@@ -105,6 +106,8 @@ services:
     environment:
       - GATEWAY_URL=http://gateway-service:8090
       - CHOKIDAR_USEPOLLING=true
+      - VITE_GATEWAY_URL=http://localhost:8090
+      - VITE_KEYCLOAK_URL=http://keycloak:8080 # server-side
     depends_on:
       gateway-service:
         condition: service_started
@@ -117,12 +120,12 @@ services:
     image: quay.io/keycloak/keycloak:24.0
     command: start-dev --import-realm
     ports:
-      - "8180:8080"
+      - "8080:8080"
     environment:
       - KEYCLOAK_ADMIN=admin
       - KEYCLOAK_ADMIN_PASSWORD=admin
-      - KC_HOSTNAME_URL=http://localhost:8180
-      - KC_HOSTNAME_ADMIN_URL=http://localhost:8180
+      - KC_HOSTNAME_URL=http://keycloak:8080
+      - KC_HOSTNAME_ADMIN_URL=http://keycloak:8080
     volumes:
       - keycloak-data:/opt/keycloak/data
       - ./scripts/keycloak/folio-realm.json:/opt/keycloak/data/import/folio-realm.json

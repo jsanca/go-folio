@@ -1,46 +1,87 @@
-import { Table, Tag, Typography } from 'antd'
+import { Table, Tag, Typography, Alert, Spin } from "antd";
+import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "../lib/useAuth";
+
+const GATEWAY =
+  import.meta.env.VITE_PUBLIC_GATEWAY_URL ?? "http://localhost:8090";
 
 const columns = [
   {
-    title: 'Code',
-    dataIndex: 'code',
-    key: 'code',
+    title: "Code",
+    dataIndex: "productCode",
+    key: "productCode",
   },
   {
-    title: 'Title',
-    dataIndex: 'title',
-    key: 'title',
+    title: "Title",
+    dataIndex: "title",
+    key: "title",
   },
   {
-    title: 'Variants',
-    dataIndex: 'variants',
-    key: 'variants',
-    align: 'right',
+    title: "Variants",
+    key: "variants",
+    align: "right",
+    render: (_, record) => record.variants?.length ?? 0,
   },
   {
-    title: 'Active',
-    dataIndex: 'active',
-    key: 'active',
-    render: (active) => (
-      <Tag color={active ? 'green' : 'default'}>{active ? 'Yes' : 'No'}</Tag>
-    ),
+    title: "Active",
+    key: "active",
+    render: (_, record) => {
+      const vs = record.variants ?? [];
+      const active = vs.length > 0 && vs.every((v) => v.active);
+      return (
+        <Tag color={active ? "green" : "default"}>{active ? "Yes" : "No"}</Tag>
+      );
+    },
   },
-]
+];
 
-const data = [
-  { key: '1', code: 'BAG-001',    title: 'Leather Tote Bag',     variants: 3, active: true  },
-  { key: '2', code: 'BELT-001',   title: 'Classic Leather Belt',  variants: 5, active: true  },
-  { key: '3', code: 'WALLET-001', title: 'Bifold Wallet',          variants: 2, active: false },
-  { key: '4', code: 'CARD-001',   title: 'Card Holder',            variants: 4, active: true  },
-]
+async function fetchAdminProducts(token) {
+  const resp = await fetch(`${GATEWAY}/admin/products`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!resp.ok) {
+    const err = new Error(`GET /admin/products → ${resp.status}`);
+    console.error(err);
+    throw err;
+  }
+  return resp.json();
+}
 
 export default function Products() {
+  const { authenticated, token } = useAuth();
+  const { data, isPending, isError, error } = useQuery({
+    queryKey: ["admin-products"],
+    queryFn: () => fetchAdminProducts(token),
+    enabled: authenticated && !!token,
+  });
+
+  if (isPending) {
+    return (
+      <div style={{ textAlign: "center", padding: 48 }}>
+        <Spin size="large" />
+      </div>
+    );
+  }
+
   return (
     <>
       <Typography.Title level={4} style={{ marginTop: 0 }}>
         Products
       </Typography.Title>
-      <Table columns={columns} dataSource={data} pagination={false} />
+      {isError && (
+        <Alert
+          type="error"
+          message="Failed to load products"
+          description={error.message}
+          style={{ marginBottom: 16 }}
+        />
+      )}
+      <Table
+        columns={columns}
+        dataSource={data ?? []}
+        rowKey="id"
+        pagination={false}
+      />
     </>
-  )
+  );
 }

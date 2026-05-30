@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/jsanca/go-folio/gateway-service/internal/clients"
 	"github.com/jsanca/go-folio/gateway-service/internal/config"
@@ -17,6 +18,7 @@ type GatewayRuntime struct {
 	Inventory         *clients.InventoryClient
 	Auth              *middleware.Verifier
 	LowStockThreshold int
+	CORSOrigins       []string
 }
 
 // NewGatewayRuntime creates and connects all downstream clients.
@@ -40,6 +42,7 @@ func NewGatewayRuntime(ctx context.Context, cfg config.Config) (*GatewayRuntime,
 		Inventory:         inventory,
 		Auth:              auth,
 		LowStockThreshold: cfg.LowStockThreshold,
+		CORSOrigins:       strings.Split(cfg.CORSAllowedOrigins, ","),
 	}, nil
 }
 

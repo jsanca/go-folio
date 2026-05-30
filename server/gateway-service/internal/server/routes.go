@@ -16,7 +16,7 @@ func registerRoutes(r chi.Router, rt *runtime.GatewayRuntime, logger *slog.Logge
 	r.Group(func(r chi.Router) {
 		r.Use(rt.Auth.RequireAuth)
 		r.Use(rt.Auth.RequireRole("admin"))
-		r.Get("/admin/products", notImplemented)
+		r.Get("/admin/products", NewAdminProductsHandler(rt, logger).ServeHTTP)
 		r.Post("/admin/products", notImplemented)
 		r.Patch("/admin/products/{sku}", notImplemented)
 		r.Put("/admin/inventory/{sku}", notImplemented)
