@@ -2,13 +2,52 @@ package service
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jsanca/go-folio/internal/domain"
 	"github.com/jsanca/go-folio/internal/repository"
 )
+
+// ── no-op SQL driver for transaction lifecycle in tests ───────────────────────
+
+type noopDriver struct{}
+type noopConn struct{}
+type noopTx struct{}
+type noopStmt struct{}
+type noopResult struct{}
+
+func (noopDriver) Open(_ string) (driver.Conn, error)         { return noopConn{}, nil }
+func (noopConn) Prepare(_ string) (driver.Stmt, error)        { return noopStmt{}, nil }
+func (noopConn) Close() error                                  { return nil }
+func (noopConn) Begin() (driver.Tx, error)                    { return noopTx{}, nil }
+func (noopTx) Commit() error                                   { return nil }
+func (noopTx) Rollback() error                                 { return nil }
+func (noopStmt) Close() error                                  { return nil }
+func (noopStmt) NumInput() int                                 { return -1 }
+func (noopStmt) Exec(_ []driver.Value) (driver.Result, error) { return noopResult{}, nil }
+func (noopStmt) Query(_ []driver.Value) (driver.Rows, error)  { return nil, errors.New("noop") }
+func (noopResult) LastInsertId() (int64, error)                { return 0, nil }
+func (noopResult) RowsAffected() (int64, error)                { return 0, nil }
+
+var registerNoopOnce sync.Once
+
+func newTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	registerNoopOnce.Do(func() {
+		sql.Register("noop", noopDriver{})
+	})
+	db, err := sql.Open("noop", "")
+	if err != nil {
+		t.Fatalf("open noop db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
 
 // ── fake repositories ─────────────────────────────────────────────────────────
 
@@ -43,12 +82,48 @@ func (f *fakeCatalogProductRepo) GetProductByID(_ context.Context, id int64) (*d
 	return &cp, nil
 }
 
+// GetProductByIDForUpdate delegates to GetProductByID; no row locking in the fake.
+func (f *fakeCatalogProductRepo) GetProductByIDForUpdate(ctx context.Context, id int64) (*domain.Product, error) {
+	return f.GetProductByID(ctx, id)
+}
+
 func (f *fakeCatalogProductRepo) ListProducts(_ context.Context) ([]domain.Product, error) {
 	var list []domain.Product
 	for _, p := range f.products {
 		list = append(list, *p)
 	}
 	return list, nil
+}
+
+func (f *fakeCatalogProductRepo) UpdateProduct(_ context.Context, id int64, p *domain.Product) (*domain.Product, error) {
+	if _, ok := f.products[id]; !ok {
+		return nil, repository.ErrProductNotFound
+	}
+	for existingID, existing := range f.products {
+		if existingID != id && existing.ProductCode == p.ProductCode {
+			return nil, repository.ErrDuplicateProductCode
+		}
+		if existingID != id && existing.Slug == p.Slug {
+			return nil, repository.ErrDuplicateSlug
+		}
+	}
+	saved := *p
+	saved.ID = id
+	f.products[id] = &saved
+	return &saved, nil
+}
+
+func (f *fakeCatalogProductRepo) DeleteProduct(_ context.Context, id int64) error {
+	if _, ok := f.products[id]; !ok {
+		return repository.ErrProductNotFound
+	}
+	delete(f.products, id)
+	return nil
+}
+
+// WithTx returns the same fake; transactions are no-ops in tests.
+func (f *fakeCatalogProductRepo) WithTx(_ *sql.Tx) repository.CatalogProductRepository {
+	return f
 }
 
 type fakeVariantRepo struct {
@@ -180,22 +255,24 @@ func (f *fakeSyncRepo) ListVariantInventoryPage(_ context.Context, q domain.Sync
 
 // ── test setup helpers ────────────────────────────────────────────────────────
 
-func newTestCatalogService() (CatalogService, *fakeCatalogProductRepo, *fakeVariantRepo, *fakeImageRepo) {
+func newTestCatalogService(t *testing.T) (CatalogService, *fakeCatalogProductRepo, *fakeVariantRepo, *fakeImageRepo) {
+	t.Helper()
 	pr := newFakeCatalogProductRepo()
 	vr := newFakeVariantRepo()
 	ir := newFakeImageRepo()
 	sr := &fakeSyncRepo{}
-	return NewCatalogService(pr, vr, ir, sr), pr, vr, ir
+	return NewCatalogService(newTestDB(t), pr, vr, ir, sr), pr, vr, ir
 }
 
-func newSyncService(sr *fakeSyncRepo) CatalogService {
-	return NewCatalogService(newFakeCatalogProductRepo(), newFakeVariantRepo(), newFakeImageRepo(), sr)
+func newSyncService(t *testing.T, sr *fakeSyncRepo) CatalogService {
+	t.Helper()
+	return NewCatalogService(newTestDB(t), newFakeCatalogProductRepo(), newFakeVariantRepo(), newFakeImageRepo(), sr)
 }
 
 // ── Product tests ─────────────────────────────────────────────────────────────
 
 func TestCatalog_CreateProduct_ValidProduct(t *testing.T) {
-	svc, _, _, _ := newTestCatalogService()
+	svc, _, _, _ := newTestCatalogService(t)
 	p := &domain.Product{ProductCode: "BM-02", Title: "Billetera Colores", Slug: "billetera-colores"}
 	got, err := svc.CreateProduct(context.Background(), p)
 	if err != nil {
@@ -207,7 +284,7 @@ func TestCatalog_CreateProduct_ValidProduct(t *testing.T) {
 }
 
 func TestCatalog_CreateProduct_RejectsInvalidProduct(t *testing.T) {
-	svc, _, _, _ := newTestCatalogService()
+	svc, _, _, _ := newTestCatalogService(t)
 	_, err := svc.CreateProduct(context.Background(), &domain.Product{})
 	if !errors.Is(err, ErrInvalidProduct) {
 		t.Errorf("expected ErrInvalidProduct, got %v", err)
@@ -215,7 +292,7 @@ func TestCatalog_CreateProduct_RejectsInvalidProduct(t *testing.T) {
 }
 
 func TestCatalog_CreateProduct_ValidatesWithoutSKUOrPriceOrStock(t *testing.T) {
-	svc, _, _, _ := newTestCatalogService()
+	svc, _, _, _ := newTestCatalogService(t)
 	p := &domain.Product{ProductCode: "X-01", Title: "Test", Slug: "test"}
 	_, err := svc.CreateProduct(context.Background(), p)
 	if err != nil {
@@ -224,7 +301,7 @@ func TestCatalog_CreateProduct_ValidatesWithoutSKUOrPriceOrStock(t *testing.T) {
 }
 
 func TestCatalog_GetProductByID_NotFound(t *testing.T) {
-	svc, _, _, _ := newTestCatalogService()
+	svc, _, _, _ := newTestCatalogService(t)
 	_, err := svc.GetProductByID(context.Background(), 999)
 	if !errors.Is(err, repository.ErrProductNotFound) {
 		t.Errorf("expected ErrProductNotFound, got %v", err)
@@ -234,7 +311,7 @@ func TestCatalog_GetProductByID_NotFound(t *testing.T) {
 // ── Variant tests ─────────────────────────────────────────────────────────────
 
 func TestCatalog_AddVariant_RequiresSKU(t *testing.T) {
-	svc, _, _, _ := newTestCatalogService()
+	svc, _, _, _ := newTestCatalogService(t)
 	v := &domain.ProductVariant{ProductID: 1, Currency: "CRC", StockStatus: domain.StockStatusInStock}
 	_, err := svc.AddVariantToProduct(context.Background(), v)
 	if !errors.Is(err, ErrInvalidVariant) {
@@ -243,7 +320,7 @@ func TestCatalog_AddVariant_RequiresSKU(t *testing.T) {
 }
 
 func TestCatalog_AddVariant_Valid(t *testing.T) {
-	svc, _, _, _ := newTestCatalogService()
+	svc, _, _, _ := newTestCatalogService(t)
 	v := &domain.ProductVariant{
 		ProductID:   1,
 		SKU:         "BM-02-COL-CO-CA",
@@ -261,7 +338,7 @@ func TestCatalog_AddVariant_Valid(t *testing.T) {
 }
 
 func TestCatalog_UpdateVariantPricing_BySKU(t *testing.T) {
-	svc, _, vr, _ := newTestCatalogService()
+	svc, _, vr, _ := newTestCatalogService(t)
 	_ = seedVariant(vr, "BM-02-COL-CO-MI", 1)
 
 	retail := domain.Money{AmountCents: 2000000}
@@ -281,7 +358,7 @@ func TestCatalog_UpdateVariantPricing_BySKU(t *testing.T) {
 }
 
 func TestCatalog_UpdateVariantPricing_NotFound(t *testing.T) {
-	svc, _, _, _ := newTestCatalogService()
+	svc, _, _, _ := newTestCatalogService(t)
 	err := svc.UpdateVariantPricing(context.Background(), "GHOST", domain.Money{}, nil, "CRC")
 	if !errors.Is(err, repository.ErrVariantNotFound) {
 		t.Errorf("expected ErrVariantNotFound, got %v", err)
@@ -289,7 +366,7 @@ func TestCatalog_UpdateVariantPricing_NotFound(t *testing.T) {
 }
 
 func TestCatalog_ListVariantsByProductID(t *testing.T) {
-	svc, _, vr, _ := newTestCatalogService()
+	svc, _, vr, _ := newTestCatalogService(t)
 	_ = seedVariant(vr, "BM-02-COL-CO-CA", 10)
 	_ = seedVariant(vr, "BM-02-COL-CO-NE", 10)
 	_ = seedVariant(vr, "OTHER-SKU", 99)
@@ -306,7 +383,7 @@ func TestCatalog_ListVariantsByProductID(t *testing.T) {
 // ── Image tests ───────────────────────────────────────────────────────────────
 
 func TestCatalog_AddProductImage_ProductLevel(t *testing.T) {
-	svc, _, _, _ := newTestCatalogService()
+	svc, _, _, _ := newTestCatalogService(t)
 	img := &domain.ProductImage{ProductID: 1, URL: "https://example.com/img.jpg"}
 	got, err := svc.AddProductImage(context.Background(), img)
 	if err != nil {
@@ -321,7 +398,7 @@ func TestCatalog_AddProductImage_ProductLevel(t *testing.T) {
 }
 
 func TestCatalog_AddProductImage_VariantLevel(t *testing.T) {
-	svc, _, _, _ := newTestCatalogService()
+	svc, _, _, _ := newTestCatalogService(t)
 	vid := int64(7)
 	img := &domain.ProductImage{ProductID: 1, VariantID: &vid, URL: "https://example.com/v.jpg"}
 	got, err := svc.AddProductImage(context.Background(), img)
@@ -334,7 +411,7 @@ func TestCatalog_AddProductImage_VariantLevel(t *testing.T) {
 }
 
 func TestCatalog_AddProductImage_RejectsInvalid(t *testing.T) {
-	svc, _, _, _ := newTestCatalogService()
+	svc, _, _, _ := newTestCatalogService(t)
 	_, err := svc.AddProductImage(context.Background(), &domain.ProductImage{})
 	if !errors.Is(err, ErrInvalidImage) {
 		t.Errorf("expected ErrInvalidImage, got %v", err)
@@ -342,7 +419,7 @@ func TestCatalog_AddProductImage_RejectsInvalid(t *testing.T) {
 }
 
 func TestCatalog_ListProductImagesByProductID(t *testing.T) {
-	svc, _, _, _ := newTestCatalogService()
+	svc, _, _, _ := newTestCatalogService(t)
 	svc.AddProductImage(context.Background(), &domain.ProductImage{ProductID: 1, URL: "https://a.com/1.jpg"}) //nolint:errcheck
 	svc.AddProductImage(context.Background(), &domain.ProductImage{ProductID: 1, URL: "https://a.com/2.jpg"}) //nolint:errcheck
 	svc.AddProductImage(context.Background(), &domain.ProductImage{ProductID: 2, URL: "https://a.com/3.jpg"}) //nolint:errcheck
@@ -357,7 +434,7 @@ func TestCatalog_ListProductImagesByProductID(t *testing.T) {
 }
 
 func TestCatalog_ListProductImagesByVariantID(t *testing.T) {
-	svc, _, _, _ := newTestCatalogService()
+	svc, _, _, _ := newTestCatalogService(t)
 	vid1 := int64(3)
 	vid2 := int64(4)
 	svc.AddProductImage(context.Background(), &domain.ProductImage{ProductID: 1, VariantID: &vid1, URL: "https://a.com/v3.jpg"}) //nolint:errcheck
@@ -377,7 +454,7 @@ func TestCatalog_ListProductImagesByVariantID(t *testing.T) {
 
 func TestSync_DefaultPageSizeForProjections(t *testing.T) {
 	sr := &fakeSyncRepo{}
-	svc := newSyncService(sr)
+	svc := newSyncService(t, sr)
 	_, err := svc.ListProductProjections(context.Background(), domain.SyncQuery{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -389,7 +466,7 @@ func TestSync_DefaultPageSizeForProjections(t *testing.T) {
 
 func TestSync_DefaultPageSizeForInventory(t *testing.T) {
 	sr := &fakeSyncRepo{}
-	svc := newSyncService(sr)
+	svc := newSyncService(t, sr)
 	_, err := svc.ListVariantInventory(context.Background(), domain.SyncQuery{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -401,7 +478,7 @@ func TestSync_DefaultPageSizeForInventory(t *testing.T) {
 
 func TestSync_MaxPageSizeClamped_Projections(t *testing.T) {
 	sr := &fakeSyncRepo{}
-	svc := newSyncService(sr)
+	svc := newSyncService(t, sr)
 	_, _ = svc.ListProductProjections(context.Background(), domain.SyncQuery{PageSize: 99999})
 	if sr.capturedQuery.PageSize != maxProjectionPageSize {
 		t.Errorf("expected pageSize clamped to %d, got %d", maxProjectionPageSize, sr.capturedQuery.PageSize)
@@ -410,7 +487,7 @@ func TestSync_MaxPageSizeClamped_Projections(t *testing.T) {
 
 func TestSync_MaxPageSizeClamped_Inventory(t *testing.T) {
 	sr := &fakeSyncRepo{}
-	svc := newSyncService(sr)
+	svc := newSyncService(t, sr)
 	_, _ = svc.ListVariantInventory(context.Background(), domain.SyncQuery{PageSize: 99999})
 	if sr.capturedQuery.PageSize != maxInventoryPageSize {
 		t.Errorf("expected pageSize clamped to %d, got %d", maxInventoryPageSize, sr.capturedQuery.PageSize)
@@ -419,7 +496,7 @@ func TestSync_MaxPageSizeClamped_Inventory(t *testing.T) {
 
 func TestSync_UpdatedSincePassedToRepo(t *testing.T) {
 	sr := &fakeSyncRepo{}
-	svc := newSyncService(sr)
+	svc := newSyncService(t, sr)
 	ts := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	_, _ = svc.ListVariantInventory(context.Background(), domain.SyncQuery{UpdatedSince: &ts})
 	if sr.capturedQuery.UpdatedSince == nil || !sr.capturedQuery.UpdatedSince.Equal(ts) {
@@ -436,7 +513,7 @@ func TestSync_HasNextTrueWhenMoreRecordsExist(t *testing.T) {
 			{SKU: "SKU-3", VariantID: 3, UpdatedAt: time.Now()},
 		},
 	}
-	svc := newSyncService(sr)
+	svc := newSyncService(t, sr)
 	page, err := svc.ListVariantInventory(context.Background(), domain.SyncQuery{PageSize: 2})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -458,7 +535,7 @@ func TestSync_NextCursorSetWhenHasNext(t *testing.T) {
 			{SKU: "SKU-3", VariantID: 3, UpdatedAt: now},
 		},
 	}
-	svc := newSyncService(sr)
+	svc := newSyncService(t, sr)
 	page, _ := svc.ListVariantInventory(context.Background(), domain.SyncQuery{PageSize: 2})
 	if page.NextCursor == "" {
 		t.Error("expected non-empty nextCursor when hasNext=true")
@@ -475,7 +552,7 @@ func TestSync_NextCursorSetWhenHasNext(t *testing.T) {
 
 func TestSync_EmptyResultsReturnNonNilItems(t *testing.T) {
 	sr := &fakeSyncRepo{}
-	svc := newSyncService(sr)
+	svc := newSyncService(t, sr)
 
 	projPage, _ := svc.ListProductProjections(context.Background(), domain.SyncQuery{})
 	if projPage.Items == nil {
@@ -498,7 +575,7 @@ func TestSync_ProjectionsIncludeVariantsAndImages(t *testing.T) {
 			},
 		},
 	}
-	svc := newSyncService(sr)
+	svc := newSyncService(t, sr)
 	page, err := svc.ListProductProjections(context.Background(), domain.SyncQuery{PageSize: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -521,7 +598,7 @@ func TestSync_ProjectionsAvoidNilSlices(t *testing.T) {
 			{Product: domain.Product{ID: 1, ProductCode: "X", UpdatedAt: time.Now()}},
 		},
 	}
-	svc := newSyncService(sr)
+	svc := newSyncService(t, sr)
 	page, _ := svc.ListProductProjections(context.Background(), domain.SyncQuery{PageSize: 10})
 	if page.Items[0].Variants == nil {
 		t.Error("Variants must not be nil — would serialize as JSON null")
@@ -532,7 +609,7 @@ func TestSync_ProjectionsAvoidNilSlices(t *testing.T) {
 }
 
 func TestSync_InvalidCursor_ReturnsErrInvalidCursor(t *testing.T) {
-	svc := newSyncService(&fakeSyncRepo{})
+	svc := newSyncService(t, &fakeSyncRepo{})
 	_, err := svc.ListProductProjections(context.Background(), domain.SyncQuery{Cursor: "!!!not-a-cursor!!!"})
 	if !errors.Is(err, ErrInvalidCursor) {
 		t.Errorf("expected ErrInvalidCursor, got %v", err)
@@ -544,7 +621,7 @@ func TestSync_CursorDecodedAndPassedToRepo(t *testing.T) {
 	validCursor := encodeCursor(domain.SyncCursor{UpdatedAt: ts, ID: 42})
 
 	sr := &fakeSyncRepo{}
-	svc := newSyncService(sr)
+	svc := newSyncService(t, sr)
 	_, _ = svc.ListVariantInventory(context.Background(), domain.SyncQuery{Cursor: validCursor})
 	if sr.capturedQuery.AfterAt == nil || !sr.capturedQuery.AfterAt.Equal(ts) {
 		t.Errorf("expected AfterAt=%v, got %v", ts, sr.capturedQuery.AfterAt)
@@ -571,7 +648,7 @@ func TestSync_VariantInventoryReturnsLightweightRecord(t *testing.T) {
 			},
 		},
 	}
-	svc := newSyncService(sr)
+	svc := newSyncService(t, sr)
 	page, err := svc.ListVariantInventory(context.Background(), domain.SyncQuery{PageSize: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -591,6 +668,133 @@ func TestSync_VariantInventoryReturnsLightweightRecord(t *testing.T) {
 	}
 	if rec.Currency != "CRC" {
 		t.Errorf("expected currency CRC, got %s", rec.Currency)
+	}
+}
+
+// ── UpdateProduct tests ───────────────────────────────────────────────────────
+
+func TestCatalog_UpdateProduct_HappyPath(t *testing.T) {
+	svc, pr, _, _ := newTestCatalogService(t)
+	created, _ := svc.CreateProduct(context.Background(), &domain.Product{
+		ProductCode: "BM-02", Title: "Original Title", Slug: "original-slug", Department: "Hombre",
+	})
+
+	newTitle := "Updated Title"
+	newDept := "Mujer"
+	got, err := svc.UpdateProduct(context.Background(), created.ID, ProductUpdate{
+		Title:      &newTitle,
+		Department: &newDept,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Title != newTitle {
+		t.Errorf("expected title %q, got %q", newTitle, got.Title)
+	}
+	if got.Department != newDept {
+		t.Errorf("expected department %q, got %q", newDept, got.Department)
+	}
+	_ = pr
+}
+
+func TestCatalog_UpdateProduct_PartialUpdate(t *testing.T) {
+	svc, _, _, _ := newTestCatalogService(t)
+	created, _ := svc.CreateProduct(context.Background(), &domain.Product{
+		ProductCode: "BM-03", Title: "Stable Title", Slug: "stable-slug", Department: "Hombre",
+	})
+
+	newTitle := "New Title Only"
+	got, err := svc.UpdateProduct(context.Background(), created.ID, ProductUpdate{Title: &newTitle})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Title != newTitle {
+		t.Errorf("expected title %q, got %q", newTitle, got.Title)
+	}
+	if got.ProductCode != "BM-03" {
+		t.Errorf("expected unchanged product code BM-03, got %q", got.ProductCode)
+	}
+	if got.Slug != "stable-slug" {
+		t.Errorf("expected unchanged slug stable-slug, got %q", got.Slug)
+	}
+}
+
+func TestCatalog_UpdateProduct_NotFound(t *testing.T) {
+	svc, _, _, _ := newTestCatalogService(t)
+	_, err := svc.UpdateProduct(context.Background(), 999, ProductUpdate{})
+	if !errors.Is(err, repository.ErrProductNotFound) {
+		t.Errorf("expected ErrProductNotFound, got %v", err)
+	}
+}
+
+func TestCatalog_UpdateProduct_DuplicateCode(t *testing.T) {
+	svc, _, _, _ := newTestCatalogService(t)
+	svc.CreateProduct(context.Background(), &domain.Product{ProductCode: "FIRST", Title: "First", Slug: "first"})           //nolint:errcheck
+	second, _ := svc.CreateProduct(context.Background(), &domain.Product{ProductCode: "SECOND", Title: "Second", Slug: "second"}) //nolint:errcheck
+
+	code := "FIRST"
+	_, err := svc.UpdateProduct(context.Background(), second.ID, ProductUpdate{ProductCode: &code})
+	if !errors.Is(err, repository.ErrDuplicateProductCode) {
+		t.Errorf("expected ErrDuplicateProductCode, got %v", err)
+	}
+}
+
+func TestCatalog_UpdateProduct_ClearRequiredField(t *testing.T) {
+	svc, _, _, _ := newTestCatalogService(t)
+	created, _ := svc.CreateProduct(context.Background(), &domain.Product{
+		ProductCode: "BM-05", Title: "Title", Slug: "slug",
+	})
+
+	empty := ""
+	_, err := svc.UpdateProduct(context.Background(), created.ID, ProductUpdate{ProductCode: &empty})
+	if !errors.Is(err, ErrInvalidProduct) {
+		t.Errorf("expected ErrInvalidProduct, got %v", err)
+	}
+}
+
+func TestCatalog_UpdateProduct_RollsBackOnError(t *testing.T) {
+	svc, _, _, _ := newTestCatalogService(t)
+	created, _ := svc.CreateProduct(context.Background(), &domain.Product{
+		ProductCode: "RB-01", Title: "Rollback Test", Slug: "rollback-test",
+	})
+
+	// Attempt to clear the product code — validation fails before any write.
+	empty := ""
+	_, err := svc.UpdateProduct(context.Background(), created.ID, ProductUpdate{ProductCode: &empty})
+	if !errors.Is(err, ErrInvalidProduct) {
+		t.Fatalf("expected ErrInvalidProduct, got %v", err)
+	}
+
+	// Product must be unchanged after the failed transaction.
+	got, err := svc.GetProductByID(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("unexpected error fetching product: %v", err)
+	}
+	if got.ProductCode != "RB-01" {
+		t.Errorf("expected product code RB-01 after rollback, got %q", got.ProductCode)
+	}
+}
+
+func TestCatalog_DeleteProduct_HappyPath(t *testing.T) {
+	svc, _, _, _ := newTestCatalogService(t)
+	created, _ := svc.CreateProduct(context.Background(), &domain.Product{
+		ProductCode: "DEL-01", Title: "To Delete", Slug: "to-delete",
+	})
+
+	if err := svc.DeleteProduct(context.Background(), created.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, err := svc.GetProductByID(context.Background(), created.ID)
+	if !errors.Is(err, repository.ErrProductNotFound) {
+		t.Errorf("expected ErrProductNotFound after delete, got %v", err)
+	}
+}
+
+func TestCatalog_DeleteProduct_NotFound(t *testing.T) {
+	svc, _, _, _ := newTestCatalogService(t)
+	err := svc.DeleteProduct(context.Background(), 999)
+	if !errors.Is(err, repository.ErrProductNotFound) {
+		t.Errorf("expected ErrProductNotFound, got %v", err)
 	}
 }
 

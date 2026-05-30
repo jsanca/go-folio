@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 )
@@ -32,11 +33,14 @@ type CatalogVariant struct {
 
 // CatalogProduct is the subset of catalog-service's Product used by the gateway.
 type CatalogProduct struct {
-	ID          int64  `json:"id"`
-	ProductCode string `json:"productCode"`
-	Title       string `json:"title"`
-	Slug        string `json:"slug"`
-	Active      bool   `json:"active"`
+	ID               int64  `json:"id"`
+	ProductCode      string `json:"productCode"`
+	Title            string `json:"title"`
+	Slug             string `json:"slug"`
+	ShortDescription string `json:"shortDescription"`
+	Department       string `json:"department"`
+	Category         string `json:"category"`
+	Active           bool   `json:"active"`
 }
 
 // CatalogProjection mirrors catalog-service's ProductProjection JSON shape.
@@ -104,6 +108,28 @@ func (c *CatalogClient) GetVariantBySKU(ctx context.Context, sku string) (*Catal
 		return nil, fmt.Errorf("decode get variant response: %w", err)
 	}
 	return &result, nil
+}
+
+// ProxyRequest forwards a mutating request to the catalog-service and returns
+// the upstream status code and raw response body.
+func (c *CatalogClient) ProxyRequest(ctx context.Context, method, path string, body io.Reader) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
+	if err != nil {
+		return 0, nil, fmt.Errorf("build proxy request: %w", err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("proxy request: %w", err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, fmt.Errorf("read proxy response: %w", err)
+	}
+	return resp.StatusCode, b, nil
 }
 
 // Close is a no-op; http.Client holds no persistent connection to release.

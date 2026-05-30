@@ -6,12 +6,25 @@ import (
 	"github.com/jsanca/go-folio/internal/domain"
 )
 
+// ProductUpdate holds optional fields for a partial product update.
+type ProductUpdate struct {
+	ProductCode      *string
+	Title            *string
+	Slug             *string
+	ShortDescription *string
+	Department       *string
+	Category         *string
+	Active           *bool
+}
+
 // CatalogService manages the product catalog: products, variants, and images.
 type CatalogService interface {
 	// Product operations
 	CreateProduct(ctx context.Context, p *domain.Product) (*domain.Product, error)
 	GetProductByID(ctx context.Context, id int64) (*domain.Product, error)
 	ListProducts(ctx context.Context) ([]domain.Product, error)
+	UpdateProduct(ctx context.Context, id int64, update ProductUpdate) (*domain.Product, error)
+	DeleteProduct(ctx context.Context, id int64) error
 
 	// Variant operations
 	AddVariantToProduct(ctx context.Context, v *domain.ProductVariant) (*domain.ProductVariant, error)

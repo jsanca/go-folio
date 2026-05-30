@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,6 +180,146 @@ func signRS256JWT(key *rsa.PrivateKey, roles []string) string {
 // b64url encodes b as base64url with no padding.
 func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
+// ── mutation proxy tests ──────────────────────────────────────────────────────
+
+// TestAdminProductsMutations_Proxy verifies that POST, PATCH, and DELETE under
+// /admin/products proxy through to catalog-service and return its status code.
+func TestAdminProductsMutations_Proxy(t *testing.T) {
+	oidcURL, signToken := testOIDCSrv(t)
+	adminToken := "Bearer " + signToken("admin")
+
+	tests := []struct {
+		name          string
+		method        string
+		path          string
+		body          string
+		catalogStatus int
+		wantStatus    int
+	}{
+		{
+			name:          "POST creates product → 201",
+			method:        http.MethodPost,
+			path:          "/admin/products",
+			body:          `{"productCode":"BAG-002","title":"Canvas Bag","slug":"canvas-bag"}`,
+			catalogStatus: http.StatusCreated,
+			wantStatus:    http.StatusCreated,
+		},
+		{
+			name:          "POST missing fields → 400 from catalog",
+			method:        http.MethodPost,
+			path:          "/admin/products",
+			body:          `{}`,
+			catalogStatus: http.StatusBadRequest,
+			wantStatus:    http.StatusBadRequest,
+		},
+		{
+			name:          "PATCH updates product → 200",
+			method:        http.MethodPatch,
+			path:          "/admin/products/1",
+			body:          `{"title":"Updated Title"}`,
+			catalogStatus: http.StatusOK,
+			wantStatus:    http.StatusOK,
+		},
+		{
+			name:          "DELETE removes product → 204",
+			method:        http.MethodDelete,
+			path:          "/admin/products/1",
+			body:          "",
+			catalogStatus: http.StatusNoContent,
+			wantStatus:    http.StatusNoContent,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			catalog := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.catalogStatus)
+			}))
+			t.Cleanup(catalog.Close)
+
+			rt := buildRuntime(t, catalog.URL, oidcURL)
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			gw := httptest.NewServer(server.New(rt, logger))
+			t.Cleanup(gw.Close)
+
+			var bodyReader io.Reader
+			if tc.body != "" {
+				bodyReader = strings.NewReader(tc.body)
+			}
+			req, err := http.NewRequest(tc.method, gw.URL+tc.path, bodyReader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", adminToken)
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+
+			if resp.StatusCode != tc.wantStatus {
+				t.Errorf("want %d, got %d", tc.wantStatus, resp.StatusCode)
+			}
+		})
+	}
+}
+
+// TestAdminProductsMutations_AuthGates verifies that all three mutation endpoints
+// return 401 without a token and 403 with a non-admin token.
+func TestAdminProductsMutations_AuthGates(t *testing.T) {
+	catalog := fakeCatalogSrv(t)
+	oidcURL, signToken := testOIDCSrv(t)
+	rt := buildRuntime(t, catalog.URL, oidcURL)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	gw := httptest.NewServer(server.New(rt, logger))
+	t.Cleanup(gw.Close)
+
+	endpoints := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/admin/products"},
+		{http.MethodPatch, "/admin/products/1"},
+		{http.MethodDelete, "/admin/products/1"},
+	}
+
+	authCases := []struct {
+		name       string
+		header     string
+		wantStatus int
+	}{
+		{"no token", "", http.StatusUnauthorized},
+		{"non-admin token", "Bearer " + signToken("customer"), http.StatusForbidden},
+	}
+
+	for _, ep := range endpoints {
+		for _, ac := range authCases {
+			t.Run(ep.method+" "+ep.path+"/"+ac.name, func(t *testing.T) {
+				req, err := http.NewRequest(ep.method, gw.URL+ep.path, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ac.header != "" {
+					req.Header.Set("Authorization", ac.header)
+				}
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				if resp.StatusCode != ac.wantStatus {
+					t.Errorf("want %d, got %d", ac.wantStatus, resp.StatusCode)
+				}
+			})
+		}
+	}
+}
+
 // ── unit test ─────────────────────────────────────────────────────────────────
 
 // TestAdminProductsHandler_ListProducts verifies that AdminProductsHandler
@@ -241,6 +382,74 @@ func TestAdminProductsHandler_ListProducts(t *testing.T) {
 }
 
 // ── integration tests ─────────────────────────────────────────────────────────
+
+// TestAdminProducts_FullFields verifies that GET /admin/products returns the
+// full product shape including shortDescription, department, category, and active.
+func TestAdminProducts_FullFields(t *testing.T) {
+	fullFixture := clients.CatalogProjection{
+		Product: clients.CatalogProduct{
+			ID:               2,
+			ProductCode:      "WAL-001",
+			Title:            "Slim Wallet",
+			Slug:             "slim-wallet",
+			ShortDescription: "A slim leather wallet",
+			Department:       "Wallets",
+			Category:         "Slim",
+			Active:           true,
+		},
+		Variants: []clients.CatalogVariant{
+			{SKU: "WAL-001-BRN", Currency: "USD", Active: true},
+		},
+	}
+
+	payload, _ := json.Marshal([]clients.CatalogProjection{fullFixture})
+	catalog := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload) //nolint:errcheck
+	}))
+	t.Cleanup(catalog.Close)
+
+	rt := buildRuntime(t, catalog.URL, "")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := server.NewAdminProductsHandler(rt, logger)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/products", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body)
+	}
+
+	var products []struct {
+		ID               int64  `json:"id"`
+		ProductCode      string `json:"productCode"`
+		Title            string `json:"title"`
+		Slug             string `json:"slug"`
+		ShortDescription string `json:"shortDescription"`
+		Department       string `json:"department"`
+		Category         string `json:"category"`
+		Active           bool   `json:"active"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&products); err != nil {
+		t.Fatal("decode response:", err)
+	}
+	if len(products) != 1 {
+		t.Fatalf("want 1 product, got %d", len(products))
+	}
+	p := products[0]
+	if p.ShortDescription != "A slim leather wallet" {
+		t.Errorf("shortDescription: want %q, got %q", "A slim leather wallet", p.ShortDescription)
+	}
+	if p.Department != "Wallets" {
+		t.Errorf("department: want %q, got %q", "Wallets", p.Department)
+	}
+	if p.Category != "Slim" {
+		t.Errorf("category: want %q, got %q", "Slim", p.Category)
+	}
+	if !p.Active {
+		t.Errorf("active: want true, got false")
+	}
+}
 
 // TestAdminProductsHandler_AuthGates wires a full gateway httptest server and
 // verifies that the auth middleware correctly gates /admin/products.

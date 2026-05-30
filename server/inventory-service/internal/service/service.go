@@ -1,4 +1,5 @@
-package inventory
+// Package service implements the gRPC InventoryServiceServer.
+package service
 
 import (
 	"context"
@@ -8,6 +9,8 @@ import (
 	"log/slog"
 
 	invpb "github.com/jsanca/go-folio/gen/inventory"
+	"github.com/jsanca/go-folio/inventory-service/internal/domain"
+	"github.com/jsanca/go-folio/inventory-service/internal/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -18,13 +21,13 @@ import (
 type Service struct {
 	invpb.UnimplementedInventoryServiceServer
 	db     *sql.DB
-	repo   Repository
+	repo   repository.Repository
 	logger *slog.Logger
 }
 
 // NewService creates a Service backed by the given repository and database.
 // db is used exclusively to begin transactions; repo handles all data access.
-func NewService(db *sql.DB, repo Repository, logger *slog.Logger) *Service {
+func NewService(db *sql.DB, repo repository.Repository, logger *slog.Logger) *Service {
 	return &Service{db: db, repo: repo, logger: logger}
 }
 
@@ -32,7 +35,7 @@ func NewService(db *sql.DB, repo Repository, logger *slog.Logger) *Service {
 func (s *Service) GetStock(ctx context.Context, req *invpb.GetStockRequest) (*invpb.GetStockResponse, error) {
 	stock, err := s.repo.GetStock(ctx, req.GetSku())
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, repository.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "sku not found: %s", req.GetSku())
 		}
 		s.logger.Error("get stock", "sku", req.GetSku(), "error", err)
@@ -48,14 +51,14 @@ func (s *Service) GetStock(ctx context.Context, req *invpb.GetStockRequest) (*in
 // AdjustStock applies a delta to available stock for a SKU.
 // A positive delta adds stock; a negative delta removes it.
 func (s *Service) AdjustStock(ctx context.Context, req *invpb.AdjustStockRequest) (*invpb.AdjustStockResponse, error) {
-	stock, err := s.inTx(ctx, func(r Repository) (*Stock, error) {
+	stock, err := s.inTx(ctx, func(r repository.Repository) (*domain.Stock, error) {
 		return r.AdjustStock(ctx, req.GetSku(), req.GetDelta())
 	})
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, repository.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "sku not found: %s", req.GetSku())
 		}
-		if errors.Is(err, ErrInsufficientStock) {
+		if errors.Is(err, repository.ErrInsufficientStock) {
 			return nil, status.Errorf(codes.FailedPrecondition, "insufficient stock: %v", err)
 		}
 		s.logger.Error("adjust stock", "sku", req.GetSku(), "delta", req.GetDelta(), "error", err)
@@ -66,14 +69,14 @@ func (s *Service) AdjustStock(ctx context.Context, req *invpb.AdjustStockRequest
 
 // ReserveStock moves quantity from available to reserved and returns a reservation ID.
 func (s *Service) ReserveStock(ctx context.Context, req *invpb.ReserveStockRequest) (*invpb.ReserveStockResponse, error) {
-	res, err := s.inTxReservation(ctx, func(r Repository) (*Reservation, error) {
+	res, err := s.inTxReservation(ctx, func(r repository.Repository) (*domain.Reservation, error) {
 		return r.ReserveStock(ctx, req.GetSku(), req.GetQuantity(), req.GetOrderId())
 	})
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, repository.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "sku not found: %s", req.GetSku())
 		}
-		if errors.Is(err, ErrInsufficientStock) {
+		if errors.Is(err, repository.ErrInsufficientStock) {
 			return nil, status.Errorf(codes.FailedPrecondition, "insufficient stock: %v", err)
 		}
 		s.logger.Error("reserve stock", "sku", req.GetSku(), "quantity", req.GetQuantity(), "error", err)
@@ -84,10 +87,10 @@ func (s *Service) ReserveStock(ctx context.Context, req *invpb.ReserveStockReque
 
 // ReleaseStock cancels a reservation and returns the quantity to available stock.
 func (s *Service) ReleaseStock(ctx context.Context, req *invpb.ReleaseStockRequest) (*invpb.ReleaseStockResponse, error) {
-	if _, err := s.inTx(ctx, func(r Repository) (*Stock, error) {
+	if _, err := s.inTx(ctx, func(r repository.Repository) (*domain.Stock, error) {
 		return r.ReleaseStock(ctx, req.GetReservationId())
 	}); err != nil {
-		if errors.Is(err, ErrNotFound) {
+		if errors.Is(err, repository.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "reservation not found: %s", req.GetReservationId())
 		}
 		s.logger.Error("release stock", "reservation_id", req.GetReservationId(), "error", err)
@@ -96,8 +99,26 @@ func (s *Service) ReleaseStock(ctx context.Context, req *invpb.ReleaseStockReque
 	return &invpb.ReleaseStockResponse{Success: true}, nil
 }
 
+// ListStock returns all SKUs with their current available and reserved quantities.
+func (s *Service) ListStock(ctx context.Context, _ *invpb.ListStockRequest) (*invpb.ListStockResponse, error) {
+	stocks, err := s.repo.ListStock(ctx)
+	if err != nil {
+		s.logger.Error("list stock", "error", err)
+		return nil, status.Error(codes.Internal, "internal error")
+	}
+	items := make([]*invpb.StockRecord, 0, len(stocks))
+	for _, st := range stocks {
+		items = append(items, &invpb.StockRecord{
+			Sku:       st.SKU,
+			Available: st.Available,
+			Reserved:  st.Reserved,
+		})
+	}
+	return &invpb.ListStockResponse{Items: items}, nil
+}
+
 // inTx begins a transaction, binds the repository to it, runs fn, and commits.
-func (s *Service) inTx(ctx context.Context, fn func(Repository) (*Stock, error)) (*Stock, error) {
+func (s *Service) inTx(ctx context.Context, fn func(repository.Repository) (*domain.Stock, error)) (*domain.Stock, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -113,8 +134,8 @@ func (s *Service) inTx(ctx context.Context, fn func(Repository) (*Stock, error))
 	return result, nil
 }
 
-// inTxReservation is inTx for operations that return a *Reservation.
-func (s *Service) inTxReservation(ctx context.Context, fn func(Repository) (*Reservation, error)) (*Reservation, error) {
+// inTxReservation is inTx for operations that return a *domain.Reservation.
+func (s *Service) inTxReservation(ctx context.Context, fn func(repository.Repository) (*domain.Reservation, error)) (*domain.Reservation, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)

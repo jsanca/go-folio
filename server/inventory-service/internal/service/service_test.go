@@ -1,4 +1,4 @@
-package inventory
+package service
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	invpb "github.com/jsanca/go-folio/gen/inventory"
+	"github.com/jsanca/go-folio/inventory-service/internal/domain"
+	"github.com/jsanca/go-folio/inventory-service/internal/repository"
 	_ "github.com/mattn/go-sqlite3"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -19,65 +21,65 @@ import (
 // WithTx returns itself — the transaction lifecycle is exercised through the
 // real *sql.DB passed to NewService; data mutations stay in-memory.
 type fakeRepository struct {
-	stock        map[string]*Stock
-	reservations map[string]*Reservation
+	stock        map[string]*domain.Stock
+	reservations map[string]*domain.Reservation
 }
 
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
-		stock:        make(map[string]*Stock),
-		reservations: make(map[string]*Reservation),
+		stock:        make(map[string]*domain.Stock),
+		reservations: make(map[string]*domain.Reservation),
 	}
 }
 
 func (r *fakeRepository) seed(sku string, available, reserved int32) {
-	r.stock[sku] = &Stock{SKU: sku, Available: available, Reserved: reserved}
+	r.stock[sku] = &domain.Stock{SKU: sku, Available: available, Reserved: reserved}
 }
 
-func (r *fakeRepository) GetStock(_ context.Context, sku string) (*Stock, error) {
+func (r *fakeRepository) GetStock(_ context.Context, sku string) (*domain.Stock, error) {
 	s, ok := r.stock[sku]
 	if !ok {
-		return nil, ErrNotFound
+		return nil, repository.ErrNotFound
 	}
 	cp := *s
 	return &cp, nil
 }
 
-func (r *fakeRepository) AdjustStock(_ context.Context, sku string, delta int32) (*Stock, error) {
+func (r *fakeRepository) AdjustStock(_ context.Context, sku string, delta int32) (*domain.Stock, error) {
 	s, ok := r.stock[sku]
 	if !ok {
-		return nil, ErrNotFound
+		return nil, repository.ErrNotFound
 	}
 	newAvailable := s.Available + delta
 	if newAvailable < 0 {
-		return nil, ErrInsufficientStock
+		return nil, repository.ErrInsufficientStock
 	}
 	s.Available = newAvailable
 	cp := *s
 	return &cp, nil
 }
 
-func (r *fakeRepository) ReserveStock(_ context.Context, sku string, quantity int32, orderID string) (*Reservation, error) {
+func (r *fakeRepository) ReserveStock(_ context.Context, sku string, quantity int32, orderID string) (*domain.Reservation, error) {
 	s, ok := r.stock[sku]
 	if !ok {
-		return nil, ErrNotFound
+		return nil, repository.ErrNotFound
 	}
 	if s.Available < quantity {
-		return nil, ErrInsufficientStock
+		return nil, repository.ErrInsufficientStock
 	}
-	id := newID()
+	id := repository.NewID()
 	s.Available -= quantity
 	s.Reserved += quantity
-	res := &Reservation{ID: id, SKU: sku, Quantity: quantity, OrderID: orderID}
+	res := &domain.Reservation{ID: id, SKU: sku, Quantity: quantity, OrderID: orderID}
 	r.reservations[id] = res
 	cp := *res
 	return &cp, nil
 }
 
-func (r *fakeRepository) ReleaseStock(_ context.Context, reservationID string) (*Stock, error) {
+func (r *fakeRepository) ReleaseStock(_ context.Context, reservationID string) (*domain.Stock, error) {
 	res, ok := r.reservations[reservationID]
 	if !ok {
-		return nil, ErrNotFound
+		return nil, repository.ErrNotFound
 	}
 	s := r.stock[res.SKU]
 	s.Available += res.Quantity
@@ -89,7 +91,7 @@ func (r *fakeRepository) ReleaseStock(_ context.Context, reservationID string) (
 
 func (r *fakeRepository) SeedSKU(_ context.Context, sku string, available int32) error {
 	if _, ok := r.stock[sku]; !ok {
-		r.stock[sku] = &Stock{SKU: sku, Available: available}
+		r.stock[sku] = &domain.Stock{SKU: sku, Available: available}
 	}
 	return nil
 }
@@ -98,9 +100,17 @@ func (r *fakeRepository) HasAnyStock(_ context.Context) (bool, error) {
 	return len(r.stock) > 0, nil
 }
 
+func (r *fakeRepository) ListStock(_ context.Context) ([]domain.Stock, error) {
+	result := make([]domain.Stock, 0, len(r.stock))
+	for _, s := range r.stock {
+		result = append(result, *s)
+	}
+	return result, nil
+}
+
 // WithTx returns r itself so unit tests remain in-memory while the service's
 // BeginTx/Commit/Rollback lifecycle runs on the real SQLite connection.
-func (r *fakeRepository) WithTx(_ *sql.Tx) Repository {
+func (r *fakeRepository) WithTx(_ *sql.Tx) repository.Repository {
 	return r
 }
 
@@ -309,6 +319,35 @@ func TestReleaseStock_ErrNotFound_ForUnknownReservationID(t *testing.T) {
 	}
 	if !isNotFoundStatus(err) {
 		t.Errorf("expected NotFound gRPC status, got: %v", err)
+	}
+}
+
+// ── ListStock ─────────────────────────────────────────────────────────────────
+
+func TestListStock_ReturnsAllRecords(t *testing.T) {
+	repo := newFakeRepository()
+	repo.seed("LTH-BAG-001", 10, 2)
+	repo.seed("LTH-BELT-002", 5, 0)
+	svc := newTestService(t, repo)
+
+	resp, err := svc.ListStock(context.Background(), &invpb.ListStockRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(resp.Items))
+	}
+}
+
+func TestListStock_EmptyInventory_ReturnsEmptyList(t *testing.T) {
+	svc := newTestService(t, newFakeRepository())
+
+	resp, err := svc.ListStock(context.Background(), &invpb.ListStockRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Items) != 0 {
+		t.Errorf("expected 0 items, got %d", len(resp.Items))
 	}
 }
 

@@ -13,6 +13,14 @@ import (
 	"github.com/jsanca/go-folio/internal/domain"
 )
 
+// querier is the minimal interface shared by *sql.DB and *sql.Tx,
+// allowing product functions to execute within or outside a transaction.
+type querier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // PostgresCatalogRepository implements CatalogProductRepository,
 // ProductVariantRepository, ProductImageRepository, and CatalogSyncRepository
 // over a PostgreSQL database.
@@ -30,12 +38,90 @@ func NewSQLiteCatalogRepository(db *sql.DB) *PostgresCatalogRepository {
 
 // CreateProduct inserts a new product and returns the persisted record.
 func (r *PostgresCatalogRepository) CreateProduct(ctx context.Context, p *domain.Product) (*domain.Product, error) {
+	return createProduct(ctx, r.db, p)
+}
+
+// GetProductByID returns the product with the given id.
+func (r *PostgresCatalogRepository) GetProductByID(ctx context.Context, id int64) (*domain.Product, error) {
+	return getProductByID(ctx, r.db, id)
+}
+
+// GetProductByIDForUpdate returns the product with the given id and acquires a row lock (SELECT … FOR UPDATE).
+func (r *PostgresCatalogRepository) GetProductByIDForUpdate(ctx context.Context, id int64) (*domain.Product, error) {
+	return getProductByIDForUpdate(ctx, r.db, id)
+}
+
+// UpdateProduct updates all mutable fields of the product identified by id and returns the persisted record.
+func (r *PostgresCatalogRepository) UpdateProduct(ctx context.Context, id int64, p *domain.Product) (*domain.Product, error) {
+	return updateProduct(ctx, r.db, id, p)
+}
+
+// DeleteProduct removes the product identified by id.
+func (r *PostgresCatalogRepository) DeleteProduct(ctx context.Context, id int64) error {
+	return deleteProduct(ctx, r.db, id)
+}
+
+// ListProducts returns all products ordered by id.
+func (r *PostgresCatalogRepository) ListProducts(ctx context.Context) ([]domain.Product, error) {
+	return listProducts(ctx, r.db)
+}
+
+// WithTx returns a CatalogProductRepository scoped to the given transaction.
+func (r *PostgresCatalogRepository) WithTx(tx *sql.Tx) CatalogProductRepository {
+	return &pgTxCatalogRepository{tx: tx}
+}
+
+// ── pgTxCatalogRepository ────────────────────────────────────────────────────
+
+// pgTxCatalogRepository is a transaction-scoped CatalogProductRepository.
+type pgTxCatalogRepository struct {
+	tx *sql.Tx
+}
+
+// CreateProduct inserts a new product within the transaction and returns the persisted record.
+func (r *pgTxCatalogRepository) CreateProduct(ctx context.Context, p *domain.Product) (*domain.Product, error) {
+	return createProduct(ctx, r.tx, p)
+}
+
+// GetProductByID returns the product with the given id within the transaction.
+func (r *pgTxCatalogRepository) GetProductByID(ctx context.Context, id int64) (*domain.Product, error) {
+	return getProductByID(ctx, r.tx, id)
+}
+
+// GetProductByIDForUpdate returns the product with the given id and acquires a row lock within the transaction.
+func (r *pgTxCatalogRepository) GetProductByIDForUpdate(ctx context.Context, id int64) (*domain.Product, error) {
+	return getProductByIDForUpdate(ctx, r.tx, id)
+}
+
+// UpdateProduct updates all mutable fields of the product identified by id within the transaction.
+func (r *pgTxCatalogRepository) UpdateProduct(ctx context.Context, id int64, p *domain.Product) (*domain.Product, error) {
+	return updateProduct(ctx, r.tx, id, p)
+}
+
+// DeleteProduct removes the product identified by id within the transaction.
+func (r *pgTxCatalogRepository) DeleteProduct(ctx context.Context, id int64) error {
+	return deleteProduct(ctx, r.tx, id)
+}
+
+// ListProducts returns all products ordered by id within the transaction.
+func (r *pgTxCatalogRepository) ListProducts(ctx context.Context) ([]domain.Product, error) {
+	return listProducts(ctx, r.tx)
+}
+
+// WithTx returns a new transaction-scoped CatalogProductRepository bound to tx.
+func (r *pgTxCatalogRepository) WithTx(tx *sql.Tx) CatalogProductRepository {
+	return &pgTxCatalogRepository{tx: tx}
+}
+
+// ── package-level product functions ──────────────────────────────────────────
+
+func createProduct(ctx context.Context, q querier, p *domain.Product) (*domain.Product, error) {
 	tags, err := json.Marshal(tagsOrEmpty(p.Tags))
 	if err != nil {
 		return nil, fmt.Errorf("marshal tags: %w", err)
 	}
 
-	const q = `
+	const query = `
 		INSERT INTO catalog_products
 			(product_code, external_product_id, title, slug, short_description,
 			 description, additional_info, department, category, subcategory,
@@ -44,7 +130,7 @@ func (r *PostgresCatalogRepository) CreateProduct(ctx context.Context, p *domain
 		RETURNING id`
 
 	var id int64
-	err = r.db.QueryRowContext(ctx, q,
+	err = q.QueryRowContext(ctx, query,
 		p.ProductCode, nullableString(p.ExternalProductID), p.Title, p.Slug,
 		p.ShortDescription, p.Description, p.AdditionalInfo,
 		p.Department, p.Category, p.Subcategory,
@@ -53,19 +139,18 @@ func (r *PostgresCatalogRepository) CreateProduct(ctx context.Context, p *domain
 	if err != nil {
 		return nil, mapCatalogPgError(err, "create product")
 	}
-	return r.GetProductByID(ctx, id)
+	return getProductByID(ctx, q, id)
 }
 
-// GetProductByID returns the product with the given id.
-func (r *PostgresCatalogRepository) GetProductByID(ctx context.Context, id int64) (*domain.Product, error) {
-	const q = `
+func getProductByID(ctx context.Context, q querier, id int64) (*domain.Product, error) {
+	const query = `
 		SELECT id, product_code, external_product_id, title, slug,
 		       short_description, description, additional_info,
 		       department, category, subcategory, tags, base_sku,
 		       active, created_at, updated_at, last_synced_at
 		FROM catalog_products WHERE id = $1`
 
-	row := r.db.QueryRowContext(ctx, q, id)
+	row := q.QueryRowContext(ctx, query, id)
 	p, err := scanCatalogProduct(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrProductNotFound
@@ -73,16 +158,74 @@ func (r *PostgresCatalogRepository) GetProductByID(ctx context.Context, id int64
 	return p, err
 }
 
-// ListProducts returns all products ordered by id.
-func (r *PostgresCatalogRepository) ListProducts(ctx context.Context) ([]domain.Product, error) {
-	const q = `
+func getProductByIDForUpdate(ctx context.Context, q querier, id int64) (*domain.Product, error) {
+	const query = `
+		SELECT id, product_code, external_product_id, title, slug,
+		       short_description, description, additional_info,
+		       department, category, subcategory, tags, base_sku,
+		       active, created_at, updated_at, last_synced_at
+		FROM catalog_products WHERE id = $1 FOR UPDATE`
+
+	row := q.QueryRowContext(ctx, query, id)
+	p, err := scanCatalogProduct(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrProductNotFound
+	}
+	return p, err
+}
+
+func updateProduct(ctx context.Context, q querier, id int64, p *domain.Product) (*domain.Product, error) {
+	tags, err := json.Marshal(tagsOrEmpty(p.Tags))
+	if err != nil {
+		return nil, fmt.Errorf("marshal tags: %w", err)
+	}
+
+	const query = `
+		UPDATE catalog_products SET
+		    product_code = $1, title = $2, slug = $3,
+		    short_description = $4, description = $5, additional_info = $6,
+		    department = $7, category = $8, subcategory = $9,
+		    tags = $10, base_sku = $11, active = $12, updated_at = NOW()
+		WHERE id = $13`
+
+	res, err := q.ExecContext(ctx, query,
+		p.ProductCode, p.Title, p.Slug,
+		p.ShortDescription, p.Description, p.AdditionalInfo,
+		p.Department, p.Category, p.Subcategory,
+		string(tags), nullableString(p.BaseSKU), p.Active, id,
+	)
+	if err != nil {
+		return nil, mapCatalogPgError(err, "update product")
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, ErrProductNotFound
+	}
+	return getProductByID(ctx, q, id)
+}
+
+func deleteProduct(ctx context.Context, q querier, id int64) error {
+	const query = `DELETE FROM catalog_products WHERE id = $1`
+	res, err := q.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("delete product: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrProductNotFound
+	}
+	return nil
+}
+
+func listProducts(ctx context.Context, q querier) ([]domain.Product, error) {
+	const query = `
 		SELECT id, product_code, external_product_id, title, slug,
 		       short_description, description, additional_info,
 		       department, category, subcategory, tags, base_sku,
 		       active, created_at, updated_at, last_synced_at
 		FROM catalog_products ORDER BY id`
 
-	rows, err := r.db.QueryContext(ctx, q)
+	rows, err := q.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("list products: %w", err)
 	}

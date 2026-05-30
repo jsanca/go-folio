@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -17,6 +18,7 @@ const (
 )
 
 type defaultCatalogService struct {
+	db       *sql.DB
 	products repository.CatalogProductRepository
 	variants repository.ProductVariantRepository
 	images   repository.ProductImageRepository
@@ -24,18 +26,54 @@ type defaultCatalogService struct {
 }
 
 // NewCatalogService creates a CatalogService backed by the given repositories.
+// db is used exclusively to begin transactions for mutating operations.
 func NewCatalogService(
+	db *sql.DB,
 	products repository.CatalogProductRepository,
 	variants repository.ProductVariantRepository,
 	images repository.ProductImageRepository,
 	syncRepo repository.CatalogSyncRepository,
 ) CatalogService {
 	return &defaultCatalogService{
+		db:       db,
 		products: products,
 		variants: variants,
 		images:   images,
 		syncRepo: syncRepo,
 	}
+}
+
+// inTx begins a transaction, binds the product repository to it, runs fn, and commits.
+func (s *defaultCatalogService) inTx(ctx context.Context, fn func(repository.CatalogProductRepository) (*domain.Product, error)) (*domain.Product, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	result, err := fn(s.products.WithTx(tx))
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return result, nil
+}
+
+// inTxVoid is inTx for operations that return only an error.
+func (s *defaultCatalogService) inTxVoid(ctx context.Context, fn func(repository.CatalogProductRepository) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if err = fn(s.products.WithTx(tx)); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 // ── Product ──────────────────────────────────────────────────────────────────
@@ -44,7 +82,9 @@ func (s *defaultCatalogService) CreateProduct(ctx context.Context, p *domain.Pro
 	if err := p.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidProduct, err)
 	}
-	return s.products.CreateProduct(ctx, p)
+	return s.inTx(ctx, func(r repository.CatalogProductRepository) (*domain.Product, error) {
+		return r.CreateProduct(ctx, p)
+	})
 }
 
 func (s *defaultCatalogService) GetProductByID(ctx context.Context, id int64) (*domain.Product, error) {
@@ -53,6 +93,49 @@ func (s *defaultCatalogService) GetProductByID(ctx context.Context, id int64) (*
 
 func (s *defaultCatalogService) ListProducts(ctx context.Context) ([]domain.Product, error) {
 	return s.products.ListProducts(ctx)
+}
+
+// UpdateProduct applies non-nil fields from update onto the existing product, validates, and persists.
+// A SELECT FOR UPDATE is used on the initial fetch to prevent races between concurrent edits.
+func (s *defaultCatalogService) UpdateProduct(ctx context.Context, id int64, update ProductUpdate) (*domain.Product, error) {
+	return s.inTx(ctx, func(r repository.CatalogProductRepository) (*domain.Product, error) {
+		existing, err := r.GetProductByIDForUpdate(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if update.ProductCode != nil {
+			existing.ProductCode = *update.ProductCode
+		}
+		if update.Title != nil {
+			existing.Title = *update.Title
+		}
+		if update.Slug != nil {
+			existing.Slug = *update.Slug
+		}
+		if update.ShortDescription != nil {
+			existing.ShortDescription = *update.ShortDescription
+		}
+		if update.Department != nil {
+			existing.Department = *update.Department
+		}
+		if update.Category != nil {
+			existing.Category = *update.Category
+		}
+		if update.Active != nil {
+			existing.Active = *update.Active
+		}
+		if err := existing.Validate(); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidProduct, err)
+		}
+		return r.UpdateProduct(ctx, id, existing)
+	})
+}
+
+// DeleteProduct removes the product with the given id.
+func (s *defaultCatalogService) DeleteProduct(ctx context.Context, id int64) error {
+	return s.inTxVoid(ctx, func(r repository.CatalogProductRepository) error {
+		return r.DeleteProduct(ctx, id)
+	})
 }
 
 // ── Variant ──────────────────────────────────────────────────────────────────

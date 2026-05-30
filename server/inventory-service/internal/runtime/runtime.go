@@ -7,20 +7,21 @@ import (
 	"log/slog"
 
 	invpb "github.com/jsanca/go-folio/gen/inventory"
-	"github.com/jsanca/go-folio/inventory-service/internal/inventory"
+	"github.com/jsanca/go-folio/inventory-service/internal/repository"
+	"github.com/jsanca/go-folio/inventory-service/internal/service"
 )
 
 // InventoryRuntime holds all services for the inventory domain.
 // The caller retains ownership of the DB connection — InventoryRuntime does not close it.
 type InventoryRuntime struct {
 	Svc  invpb.InventoryServiceServer
-	Repo inventory.Repository
+	Repo repository.Repository
 }
 
 // NewInventoryRuntime wires the inventory repository and service.
 func NewInventoryRuntime(db *sql.DB, logger *slog.Logger) *InventoryRuntime {
-	repo := inventory.NewSQLiteRepository(db)
-	svc := inventory.NewService(db, repo, logger)
+	repo := repository.NewSQLiteRepository(db)
+	svc := service.NewService(db, repo, logger)
 	return &InventoryRuntime{
 		Svc:  svc,
 		Repo: repo,

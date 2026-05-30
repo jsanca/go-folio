@@ -21,7 +21,7 @@ type CatalogRuntime struct {
 func NewCatalogRuntime(db *sql.DB) *CatalogRuntime {
 	catalogRepo := repository.NewSQLiteCatalogRepository(db)
 	return &CatalogRuntime{
-		CatalogSvc: service.NewCatalogService(catalogRepo, catalogRepo, catalogRepo, catalogRepo),
+		CatalogSvc: service.NewCatalogService(db, catalogRepo, catalogRepo, catalogRepo, catalogRepo),
 	}
 }
 

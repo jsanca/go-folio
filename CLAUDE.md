@@ -72,7 +72,7 @@ seed/         → Idempotent seed data applied at startup
 
 ### CatalogService interface split
 
-`CatalogService` takes **four** separate repository interfaces (`CatalogProductRepository`, `ProductVariantRepository`, `ProductImageRepository`, `CatalogSyncRepository`). The PostgreSQL implementation (`sqlite_catalog_repository.go`, struct `PostgresCatalogRepository`) satisfies all four. The split is intentional: interface segregation keeps tests minimal and service dependencies explicit.
+`CatalogService` takes **four** separate repository interfaces (`CatalogProductRepository`, `ProductVariantRepository`, `ProductImageRepository`, `CatalogSyncRepository`). The PostgreSQL implementation (`postgres_catalog_repository.go`, struct `PostgresCatalogRepository`) satisfies all four. The split is intentional: interface segregation keeps tests minimal and service dependencies explicit.
 
 ### Sync / cursor pagination
 

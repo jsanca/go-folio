@@ -5,7 +5,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/jsanca/go-folio/inventory-service/internal/inventory"
+	"github.com/jsanca/go-folio/inventory-service/internal/repository"
 )
 
 // skus mirrors the SKUs seeded in catalog-service (both the 10 LeatherProduct
@@ -33,7 +33,7 @@ var skus = []struct {
 
 // Run seeds the stock table with catalog SKUs if it is empty.
 // It is a no-op if any stock records already exist.
-func Run(ctx context.Context, repo inventory.Repository, logger *slog.Logger) {
+func Run(ctx context.Context, repo repository.Repository, logger *slog.Logger) {
 	has, err := repo.HasAnyStock(ctx)
 	if err != nil || has {
 		return

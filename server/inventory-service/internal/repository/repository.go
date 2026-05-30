@@ -1,6 +1,5 @@
-// Package inventory contains the domain types, repository interface, and
-// service implementation for inventory management.
-package inventory
+// Package repository defines the data-access layer for inventory management.
+package repository
 
 import (
 	"context"
@@ -8,22 +7,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/jsanca/go-folio/inventory-service/internal/domain"
 )
-
-// Stock represents the current stock levels for a single SKU.
-type Stock struct {
-	SKU       string
-	Available int32
-	Reserved  int32
-}
-
-// Reservation represents a held quantity of a SKU against an order.
-type Reservation struct {
-	ID       string
-	SKU      string
-	Quantity int32
-	OrderID  string
-}
 
 // ErrNotFound is returned when a requested resource does not exist.
 var ErrNotFound = errors.New("not found")
@@ -35,10 +21,11 @@ var ErrInsufficientStock = errors.New("insufficient stock")
 // Implementations must not manage transaction boundaries — callers own
 // the unit of work and may pass a tx-scoped repository via WithTx.
 type Repository interface {
-	GetStock(ctx context.Context, sku string) (*Stock, error)
-	AdjustStock(ctx context.Context, sku string, delta int32) (*Stock, error)
-	ReserveStock(ctx context.Context, sku string, quantity int32, orderID string) (*Reservation, error)
-	ReleaseStock(ctx context.Context, reservationID string) (*Stock, error)
+	GetStock(ctx context.Context, sku string) (*domain.Stock, error)
+	AdjustStock(ctx context.Context, sku string, delta int32) (*domain.Stock, error)
+	ReserveStock(ctx context.Context, sku string, quantity int32, orderID string) (*domain.Reservation, error)
+	ReleaseStock(ctx context.Context, reservationID string) (*domain.Stock, error)
+	ListStock(ctx context.Context) ([]domain.Stock, error)
 	SeedSKU(ctx context.Context, sku string, available int32) error
 	HasAnyStock(ctx context.Context) (bool, error)
 	// WithTx returns a transaction-scoped Repository that executes all
@@ -63,22 +50,22 @@ func (r *PostgresRepository) WithTx(tx *sql.Tx) Repository {
 }
 
 // GetStock returns the current stock record for the given SKU.
-func (r *PostgresRepository) GetStock(ctx context.Context, sku string) (*Stock, error) {
+func (r *PostgresRepository) GetStock(ctx context.Context, sku string) (*domain.Stock, error) {
 	return queryStock(ctx, r.db, sku)
 }
 
 // AdjustStock applies delta to available stock for sku.
-func (r *PostgresRepository) AdjustStock(ctx context.Context, sku string, delta int32) (*Stock, error) {
+func (r *PostgresRepository) AdjustStock(ctx context.Context, sku string, delta int32) (*domain.Stock, error) {
 	return adjustStock(ctx, r.db, sku, delta)
 }
 
 // ReserveStock moves quantity from available to reserved and records a reservation.
-func (r *PostgresRepository) ReserveStock(ctx context.Context, sku string, quantity int32, orderID string) (*Reservation, error) {
+func (r *PostgresRepository) ReserveStock(ctx context.Context, sku string, quantity int32, orderID string) (*domain.Reservation, error) {
 	return reserveStock(ctx, r.db, sku, quantity, orderID)
 }
 
 // ReleaseStock cancels a reservation and returns its quantity to available.
-func (r *PostgresRepository) ReleaseStock(ctx context.Context, reservationID string) (*Stock, error) {
+func (r *PostgresRepository) ReleaseStock(ctx context.Context, reservationID string) (*domain.Stock, error) {
 	return releaseStock(ctx, r.db, reservationID)
 }
 
@@ -98,6 +85,11 @@ func (r *PostgresRepository) HasAnyStock(ctx context.Context) (bool, error) {
 	return count > 0, err
 }
 
+// ListStock returns all stock records ordered by SKU.
+func (r *PostgresRepository) ListStock(ctx context.Context) ([]domain.Stock, error) {
+	return listStock(ctx, r.db)
+}
+
 // pgTxRepository implements Repository using a *sql.Tx.
 type pgTxRepository struct {
 	tx *sql.Tx
@@ -109,22 +101,22 @@ func (r *pgTxRepository) WithTx(tx *sql.Tx) Repository {
 }
 
 // GetStock returns the current stock record within the transaction.
-func (r *pgTxRepository) GetStock(ctx context.Context, sku string) (*Stock, error) {
+func (r *pgTxRepository) GetStock(ctx context.Context, sku string) (*domain.Stock, error) {
 	return queryStock(ctx, r.tx, sku)
 }
 
 // AdjustStock applies delta to available stock within the transaction.
-func (r *pgTxRepository) AdjustStock(ctx context.Context, sku string, delta int32) (*Stock, error) {
+func (r *pgTxRepository) AdjustStock(ctx context.Context, sku string, delta int32) (*domain.Stock, error) {
 	return adjustStock(ctx, r.tx, sku, delta)
 }
 
 // ReserveStock moves quantity to reserved within the transaction.
-func (r *pgTxRepository) ReserveStock(ctx context.Context, sku string, quantity int32, orderID string) (*Reservation, error) {
+func (r *pgTxRepository) ReserveStock(ctx context.Context, sku string, quantity int32, orderID string) (*domain.Reservation, error) {
 	return reserveStock(ctx, r.tx, sku, quantity, orderID)
 }
 
 // ReleaseStock cancels a reservation within the transaction.
-func (r *pgTxRepository) ReleaseStock(ctx context.Context, reservationID string) (*Stock, error) {
+func (r *pgTxRepository) ReleaseStock(ctx context.Context, reservationID string) (*domain.Stock, error) {
 	return releaseStock(ctx, r.tx, reservationID)
 }
 
@@ -144,14 +136,20 @@ func (r *pgTxRepository) HasAnyStock(ctx context.Context) (bool, error) {
 	return count > 0, err
 }
 
+// ListStock returns all stock records ordered by SKU within the transaction.
+func (r *pgTxRepository) ListStock(ctx context.Context) ([]domain.Stock, error) {
+	return listStock(ctx, r.tx)
+}
+
 // querier is the common subset of *sql.DB and *sql.Tx used by the shared helpers.
 type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-func queryStock(ctx context.Context, q querier, sku string) (*Stock, error) {
-	var s Stock
+func queryStock(ctx context.Context, q querier, sku string) (*domain.Stock, error) {
+	var s domain.Stock
 	err := q.QueryRowContext(ctx,
 		`SELECT sku, available, reserved FROM stock WHERE sku = $1`, sku,
 	).Scan(&s.SKU, &s.Available, &s.Reserved)
@@ -164,7 +162,7 @@ func queryStock(ctx context.Context, q querier, sku string) (*Stock, error) {
 	return &s, nil
 }
 
-func adjustStock(ctx context.Context, q querier, sku string, delta int32) (*Stock, error) {
+func adjustStock(ctx context.Context, q querier, sku string, delta int32) (*domain.Stock, error) {
 	s, err := queryStock(ctx, q, sku)
 	if err != nil {
 		return nil, err
@@ -182,7 +180,7 @@ func adjustStock(ctx context.Context, q querier, sku string, delta int32) (*Stoc
 	return s, nil
 }
 
-func reserveStock(ctx context.Context, q querier, sku string, quantity int32, orderID string) (*Reservation, error) {
+func reserveStock(ctx context.Context, q querier, sku string, quantity int32, orderID string) (*domain.Reservation, error) {
 	s, err := queryStock(ctx, q, sku)
 	if err != nil {
 		return nil, err
@@ -190,7 +188,7 @@ func reserveStock(ctx context.Context, q querier, sku string, quantity int32, or
 	if s.Available < quantity {
 		return nil, fmt.Errorf("%w: sku=%s requested=%d available=%d", ErrInsufficientStock, sku, quantity, s.Available)
 	}
-	id := newID()
+	id := NewID()
 	if _, err = q.ExecContext(ctx,
 		`INSERT INTO reservations (id, sku, quantity, order_id) VALUES ($1, $2, $3, $4)`,
 		id, sku, quantity, orderID,
@@ -203,11 +201,11 @@ func reserveStock(ctx context.Context, q querier, sku string, quantity int32, or
 	); err != nil {
 		return nil, fmt.Errorf("update stock for reserve: %w", err)
 	}
-	return &Reservation{ID: id, SKU: sku, Quantity: quantity, OrderID: orderID}, nil
+	return &domain.Reservation{ID: id, SKU: sku, Quantity: quantity, OrderID: orderID}, nil
 }
 
-func releaseStock(ctx context.Context, q querier, reservationID string) (*Stock, error) {
-	var res Reservation
+func releaseStock(ctx context.Context, q querier, reservationID string) (*domain.Stock, error) {
+	var res domain.Reservation
 	err := q.QueryRowContext(ctx,
 		`SELECT id, sku, quantity, order_id FROM reservations WHERE id = $1`, reservationID,
 	).Scan(&res.ID, &res.SKU, &res.Quantity, &res.OrderID)
@@ -231,8 +229,28 @@ func releaseStock(ctx context.Context, q querier, reservationID string) (*Stock,
 	return queryStock(ctx, q, res.SKU)
 }
 
-// newID generates a random UUID v4.
-func newID() string {
+func listStock(ctx context.Context, q querier) ([]domain.Stock, error) {
+	rows, err := q.QueryContext(ctx, `SELECT sku, available, reserved FROM stock ORDER BY sku`)
+	if err != nil {
+		return nil, fmt.Errorf("list stock: %w", err)
+	}
+	defer rows.Close()
+	var result []domain.Stock
+	for rows.Next() {
+		var s domain.Stock
+		if err := rows.Scan(&s.SKU, &s.Available, &s.Reserved); err != nil {
+			return nil, fmt.Errorf("scan stock row: %w", err)
+		}
+		result = append(result, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list stock rows: %w", err)
+	}
+	return result, nil
+}
+
+// NewID generates a random UUID v4.
+func NewID() string {
 	var b [16]byte
 	rand.Read(b[:]) //nolint:errcheck
 	b[6] = (b[6] & 0x0f) | 0x40

@@ -10,6 +10,7 @@ service InventoryService {
   rpc ReserveStock(ReserveStockRequest) returns (ReserveStockResponse);
   rpc ReleaseStock(ReleaseStockRequest) returns (ReleaseStockResponse);
   rpc SyncStock(stream SyncStockRequest) returns (stream SyncStockResponse); // bulk
+  rpc ListStock(ListStockRequest) returns (ListStockResponse);
 }
 
 message GetStockRequest {
@@ -60,4 +61,18 @@ message SyncStockRequest {
 message SyncStockResponse {
   string sku = 1;
   bool updated = 2;
+}
+
+message ListStockRequest {
+  // future: add pagination fields here
+}
+
+message StockRecord {
+  string sku       = 1;
+  int32  available = 2;
+  int32  reserved  = 3;
+}
+
+message ListStockResponse {
+  repeated StockRecord items = 1;
 }
