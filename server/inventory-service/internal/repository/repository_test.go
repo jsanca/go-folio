@@ -3,6 +3,7 @@ package repository_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 
 	"github.com/jsanca/go-folio/inventory-service/internal/repository"
@@ -86,5 +87,196 @@ func TestListStock_EmptyTable_ReturnsNilSlice(t *testing.T) {
 	}
 	if len(stocks) != 0 {
 		t.Errorf("expected empty result, got %d records", len(stocks))
+	}
+}
+
+// ── GetStock ──────────────────────────────────────────────────────────────────
+
+func TestGetStock_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+
+	if err := repo.SeedSKU(ctx, "WAL-001", 15); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	s, err := repo.GetStock(ctx, "WAL-001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.SKU != "WAL-001" {
+		t.Errorf("SKU: want WAL-001, got %s", s.SKU)
+	}
+	if s.Available != 15 {
+		t.Errorf("available: want 15, got %d", s.Available)
+	}
+	if s.Reserved != 0 {
+		t.Errorf("reserved: want 0, got %d", s.Reserved)
+	}
+}
+
+func TestGetStock_NotFound(t *testing.T) {
+	repo := newTestRepo(t)
+
+	_, err := repo.GetStock(context.Background(), "GHOST-SKU")
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// ── AdjustStock ───────────────────────────────────────────────────────────────
+
+func TestAdjustStock_PositiveDelta(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+
+	if err := repo.SeedSKU(ctx, "BAG-001", 10); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	s, err := repo.AdjustStock(ctx, "BAG-001", 5)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.Available != 15 {
+		t.Errorf("available: want 15, got %d", s.Available)
+	}
+}
+
+func TestAdjustStock_NegativeDelta(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+
+	if err := repo.SeedSKU(ctx, "BAG-002", 10); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	s, err := repo.AdjustStock(ctx, "BAG-002", -3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.Available != 7 {
+		t.Errorf("available: want 7, got %d", s.Available)
+	}
+}
+
+func TestAdjustStock_InsufficientStock(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+
+	if err := repo.SeedSKU(ctx, "BAG-003", 3); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	_, err := repo.AdjustStock(ctx, "BAG-003", -5)
+	if !errors.Is(err, repository.ErrInsufficientStock) {
+		t.Errorf("expected ErrInsufficientStock, got %v", err)
+	}
+}
+
+func TestAdjustStock_NotFound(t *testing.T) {
+	repo := newTestRepo(t)
+
+	_, err := repo.AdjustStock(context.Background(), "GHOST-SKU", 1)
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// ── ReserveStock ──────────────────────────────────────────────────────────────
+
+func TestReserveStock_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+
+	if err := repo.SeedSKU(ctx, "BEL-001", 10); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	res, err := repo.ReserveStock(ctx, "BEL-001", 3, "ORD-001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ID == "" {
+		t.Error("expected non-empty reservation ID")
+	}
+	if res.SKU != "BEL-001" {
+		t.Errorf("SKU: want BEL-001, got %s", res.SKU)
+	}
+	if res.Quantity != 3 {
+		t.Errorf("quantity: want 3, got %d", res.Quantity)
+	}
+	if res.OrderID != "ORD-001" {
+		t.Errorf("orderID: want ORD-001, got %s", res.OrderID)
+	}
+
+	// Stock levels must reflect the reservation.
+	s, err := repo.GetStock(ctx, "BEL-001")
+	if err != nil {
+		t.Fatalf("get stock after reserve: %v", err)
+	}
+	if s.Available != 7 {
+		t.Errorf("available after reserve: want 7, got %d", s.Available)
+	}
+	if s.Reserved != 3 {
+		t.Errorf("reserved after reserve: want 3, got %d", s.Reserved)
+	}
+}
+
+func TestReserveStock_InsufficientStock(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+
+	if err := repo.SeedSKU(ctx, "BEL-002", 2); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	_, err := repo.ReserveStock(ctx, "BEL-002", 5, "ORD-002")
+	if !errors.Is(err, repository.ErrInsufficientStock) {
+		t.Errorf("expected ErrInsufficientStock, got %v", err)
+	}
+}
+
+func TestReserveStock_NotFound(t *testing.T) {
+	repo := newTestRepo(t)
+
+	_, err := repo.ReserveStock(context.Background(), "GHOST-SKU", 1, "ORD-003")
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// ── ReleaseStock ──────────────────────────────────────────────────────────────
+
+func TestReleaseStock_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+
+	if err := repo.SeedSKU(ctx, "WAL-002", 10); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	res, err := repo.ReserveStock(ctx, "WAL-002", 4, "ORD-004")
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+
+	s, err := repo.ReleaseStock(ctx, res.ID)
+	if err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if s.Available != 10 {
+		t.Errorf("available after release: want 10, got %d", s.Available)
+	}
+	if s.Reserved != 0 {
+		t.Errorf("reserved after release: want 0, got %d", s.Reserved)
+	}
+}
+
+func TestReleaseStock_ReservationNotFound(t *testing.T) {
+	repo := newTestRepo(t)
+
+	_, err := repo.ReleaseStock(context.Background(), "non-existent-reservation-id")
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }

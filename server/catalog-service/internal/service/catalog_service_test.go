@@ -798,6 +798,59 @@ func TestCatalog_DeleteProduct_NotFound(t *testing.T) {
 	}
 }
 
+// ── ListProducts tests ────────────────────────────────────────────────────────
+
+func TestCatalog_ListProducts_HappyPath(t *testing.T) {
+	svc, _, _, _ := newTestCatalogService(t)
+	svc.CreateProduct(context.Background(), &domain.Product{ProductCode: "P-01", Title: "Product One", Slug: "product-one"})   //nolint:errcheck
+	svc.CreateProduct(context.Background(), &domain.Product{ProductCode: "P-02", Title: "Product Two", Slug: "product-two"})   //nolint:errcheck
+
+	list, err := svc.ListProducts(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(list) != 2 {
+		t.Errorf("expected 2 products, got %d", len(list))
+	}
+}
+
+func TestCatalog_ListProducts_Empty(t *testing.T) {
+	svc, _, _, _ := newTestCatalogService(t)
+	list, err := svc.ListProducts(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("expected empty list, got %d items", len(list))
+	}
+}
+
+// ── GetVariantBySKU tests ─────────────────────────────────────────────────────
+
+func TestCatalog_GetVariantBySKU_HappyPath(t *testing.T) {
+	svc, _, vr, _ := newTestCatalogService(t)
+	_ = seedVariant(vr, "BM-02-COL-CO-CA", 1)
+
+	v, err := svc.GetVariantBySKU(context.Background(), "BM-02-COL-CO-CA")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v.SKU != "BM-02-COL-CO-CA" {
+		t.Errorf("expected SKU BM-02-COL-CO-CA, got %s", v.SKU)
+	}
+	if v.ProductID != 1 {
+		t.Errorf("expected productID 1, got %d", v.ProductID)
+	}
+}
+
+func TestCatalog_GetVariantBySKU_NotFound(t *testing.T) {
+	svc, _, _, _ := newTestCatalogService(t)
+	_, err := svc.GetVariantBySKU(context.Background(), "GHOST-SKU")
+	if !errors.Is(err, repository.ErrVariantNotFound) {
+		t.Errorf("expected ErrVariantNotFound, got %v", err)
+	}
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func seedVariant(vr *fakeVariantRepo, sku string, productID int64) *domain.ProductVariant {

@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { Alert, Form, Input, Modal } from 'antd'
+import { useRef, useState } from 'react'
+import { Alert, Form, Input, Modal, message } from 'antd'
+import Draggable from 'react-draggable'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../lib/useAuth'
 
@@ -28,15 +29,17 @@ async function apiAdjustStock(token, sku, delta, reason) {
   return resp.json()
 }
 
-// AdjustStockForm renders a modal form for adjusting stock for a single SKU.
-// `sku`     — the SKU to adjust; the modal title shows this value.
-// `open`    — controls modal visibility.
-// `onClose` — called when the modal is dismissed or the adjustment succeeds.
-export default function AdjustStockForm({ sku, open, onClose }) {
+// AdjustStockForm renders a draggable modal form for adjusting stock for a single SKU.
+// `sku`       — the SKU to adjust; shown in the modal title.
+// `open`      — controls modal visibility.
+// `onClose`   — called when the modal is dismissed or the adjustment succeeds.
+// `onSuccess` — optional; called with the SKU after a successful adjustment.
+export default function AdjustStockForm({ sku, open, onClose, onSuccess }) {
   const { token } = useAuth()
   const [form] = Form.useForm()
   const queryClient = useQueryClient()
   const [inlineError, setInlineError] = useState(null)
+  const draggleRef = useRef(null)
 
   const mutation = useMutation({
     mutationFn: (values) =>
@@ -45,6 +48,10 @@ export default function AdjustStockForm({ sku, open, onClose }) {
       queryClient.invalidateQueries({ queryKey: ['admin-inventory'] })
       form.resetFields()
       setInlineError(null)
+      message.success(`Stock updated for ${sku}`, 3)
+      document.querySelector(`tr[data-row-key="${sku}"]`)
+        ?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+      onSuccess?.(sku)
       onClose()
     },
     onError: (err) => {
@@ -67,13 +74,26 @@ export default function AdjustStockForm({ sku, open, onClose }) {
 
   return (
     <Modal
-      title={`Adjust Stock — ${sku}`}
+      title={
+        <div style={{ cursor: 'move' }}>
+          Adjust Stock — {sku}
+        </div>
+      }
       open={open}
       onOk={handleOk}
       onCancel={handleCancel}
       okText="Adjust"
       confirmLoading={mutation.isPending}
       destroyOnHidden
+      modalRender={(modal) => (
+        <Draggable
+          nodeRef={draggleRef}
+          handle=".ant-modal-header"
+          bounds="body"
+        >
+          <div ref={draggleRef}>{modal}</div>
+        </Draggable>
+      )}
     >
       {inlineError && (
         <Alert type="error" message={inlineError} style={{ marginBottom: 16 }} />

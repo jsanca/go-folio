@@ -32,3 +32,4 @@ leatherstore.db
 # Editor/IDE
 # .idea/
 # .vscode/
+server/gateway-service/main

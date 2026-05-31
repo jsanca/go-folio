@@ -25,6 +25,8 @@ type stubCatalogSvc struct {
 	createProductFn   func(ctx context.Context, p *domain.Product) (*domain.Product, error)
 	updateProductFn   func(ctx context.Context, id int64, update service.ProductUpdate) (*domain.Product, error)
 	deleteProductFn   func(ctx context.Context, id int64) error
+	getVariantBySKUFn func(ctx context.Context, sku string) (*domain.ProductVariant, error)
+	getProductByIDFn  func(ctx context.Context, id int64) (*domain.Product, error)
 }
 
 func (s *stubCatalogSvc) CreateProduct(ctx context.Context, p *domain.Product) (*domain.Product, error) {
@@ -34,6 +36,9 @@ func (s *stubCatalogSvc) CreateProduct(ctx context.Context, p *domain.Product) (
 	return nil, nil
 }
 func (s *stubCatalogSvc) GetProductByID(ctx context.Context, id int64) (*domain.Product, error) {
+	if s.getProductByIDFn != nil {
+		return s.getProductByIDFn(ctx, id)
+	}
 	return nil, nil
 }
 func (s *stubCatalogSvc) ListProducts(ctx context.Context) ([]domain.Product, error) { return nil, nil }
@@ -53,6 +58,9 @@ func (s *stubCatalogSvc) AddVariantToProduct(ctx context.Context, v *domain.Prod
 	return nil, nil
 }
 func (s *stubCatalogSvc) GetVariantBySKU(ctx context.Context, sku string) (*domain.ProductVariant, error) {
+	if s.getVariantBySKUFn != nil {
+		return s.getVariantBySKUFn(ctx, sku)
+	}
 	return nil, nil
 }
 func (s *stubCatalogSvc) UpdateVariantPricing(ctx context.Context, sku string, retail domain.Money, sale *domain.Money, currency string) error {
@@ -483,5 +491,134 @@ func TestProductHandler_Delete_InvalidID(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+// ── GET /products handler tests ───────────────────────────────────────────────
+
+func TestCatalogHandler_ListProducts_HappyPath(t *testing.T) {
+	svc := &stubCatalogSvc{
+		listProjectionsFn: func(_ context.Context, _ domain.SyncQuery) (*domain.ProductProjectionPage, error) {
+			return &domain.ProductProjectionPage{
+				Items: []domain.ProductProjection{
+					{
+						Product:  domain.Product{ID: 1, ProductCode: "BM-02", Title: "Billetera", Slug: "billetera"},
+						Variants: []domain.ProductVariant{{SKU: "BM-02-COL-CO-CA", Currency: "CRC"}},
+						Images:   []domain.ProductImage{},
+					},
+				},
+			}, nil
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/products", nil)
+	rec := httptest.NewRecorder()
+	newCatalogRouter(svc).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	var items []struct {
+		Product struct {
+			ProductCode string `json:"productCode"`
+		} `json:"product"`
+		Variants []struct {
+			SKU string `json:"sku"`
+		} `json:"variants"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 product, got %d", len(items))
+	}
+	if items[0].Product.ProductCode != "BM-02" {
+		t.Errorf("expected productCode BM-02, got %s", items[0].Product.ProductCode)
+	}
+	if len(items[0].Variants) != 1 || items[0].Variants[0].SKU != "BM-02-COL-CO-CA" {
+		t.Errorf("expected variant BM-02-COL-CO-CA, got %v", items[0].Variants)
+	}
+}
+
+func TestCatalogHandler_ListProducts_EmptyList(t *testing.T) {
+	svc := &stubCatalogSvc{
+		listProjectionsFn: func(_ context.Context, _ domain.SyncQuery) (*domain.ProductProjectionPage, error) {
+			return &domain.ProductProjectionPage{Items: []domain.ProductProjection{}}, nil
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/products", nil)
+	rec := httptest.NewRecorder()
+	newCatalogRouter(svc).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	body := strings.TrimSpace(rec.Body.String())
+	if body != "[]" {
+		t.Errorf("expected [], got %s", body)
+	}
+}
+
+// ── GET /catalog/variants/{sku} handler tests ─────────────────────────────────
+
+func TestCatalogHandler_GetVariantBySKU_HappyPath(t *testing.T) {
+	svc := &stubCatalogSvc{
+		getVariantBySKUFn: func(_ context.Context, sku string) (*domain.ProductVariant, error) {
+			return &domain.ProductVariant{ID: 5, ProductID: 1, SKU: sku, ColorName: "Café", Currency: "CRC"}, nil
+		},
+		getProductByIDFn: func(_ context.Context, id int64) (*domain.Product, error) {
+			return &domain.Product{ID: id, ProductCode: "BM-02", Title: "Billetera", Slug: "billetera"}, nil
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/catalog/variants/BM-02-COL-CO-CA", nil)
+	rec := httptest.NewRecorder()
+	newCatalogRouter(svc).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Product struct {
+			ProductCode string `json:"productCode"`
+		} `json:"product"`
+		Variants []struct {
+			SKU       string `json:"sku"`
+			ColorName string `json:"colorName"`
+		} `json:"variants"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if resp.Product.ProductCode != "BM-02" {
+		t.Errorf("expected productCode BM-02, got %s", resp.Product.ProductCode)
+	}
+	if len(resp.Variants) != 1 {
+		t.Fatalf("expected 1 variant, got %d", len(resp.Variants))
+	}
+	if resp.Variants[0].SKU != "BM-02-COL-CO-CA" {
+		t.Errorf("expected SKU BM-02-COL-CO-CA, got %s", resp.Variants[0].SKU)
+	}
+	if resp.Variants[0].ColorName != "Café" {
+		t.Errorf("expected colorName Café, got %s", resp.Variants[0].ColorName)
+	}
+}
+
+func TestCatalogHandler_GetVariantBySKU_NotFound(t *testing.T) {
+	svc := &stubCatalogSvc{
+		getVariantBySKUFn: func(_ context.Context, _ string) (*domain.ProductVariant, error) {
+			return nil, repository.ErrVariantNotFound
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/catalog/variants/GHOST-SKU", nil)
+	rec := httptest.NewRecorder()
+	newCatalogRouter(svc).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+	var m map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &m) //nolint:errcheck
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "NOT_FOUND" {
+		t.Errorf("expected NOT_FOUND, got %v", errObj["code"])
 	}
 }

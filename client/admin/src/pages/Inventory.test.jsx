@@ -7,6 +7,7 @@ vi.mock('../lib/useAuth', () => ({
   useAuth: () => ({ authenticated: true, token: 'test-token' }),
 }))
 
+
 const fixtureInventory = [
   { sku: 'BAG-001-BRN', available: 20, reserved: 2,  status: 'IN_STOCK'     },
   { sku: 'BAG-001-BLK', available:  3, reserved: 1,  status: 'LOW_STOCK'    },
@@ -95,10 +96,6 @@ describe('Inventory adjustments', () => {
     vi.restoreAllMocks()
   })
 
-  afterEach(() => {
-    // nothing to clean up — AdjustStockForm is state-controlled, not Modal.confirm
-  })
-
   it('opens Adjust modal when Adjust button is clicked', async () => {
     vi.stubGlobal('fetch', makeFetch())
     render(<Inventory />, { wrapper })
@@ -111,7 +108,7 @@ describe('Inventory adjustments', () => {
     )
 
     expect(
-      await screen.findByText(/Adjust Stock/, { selector: '.ant-modal-title' }),
+      await screen.findByRole('dialog'),
     ).toBeInTheDocument()
   })
 
@@ -127,7 +124,7 @@ describe('Inventory adjustments', () => {
       within(document.querySelector('.ant-table-tbody'))
         .getAllByRole('button', { name: 'Adjust' })[0],
     )
-    await screen.findByText(/Adjust Stock/, { selector: '.ant-modal-title' })
+    await screen.findByRole('dialog')
 
     fireEvent.change(screen.getByLabelText('Delta'), { target: { value: '-2' } })
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'sale' } })
@@ -163,7 +160,7 @@ describe('Inventory adjustments', () => {
       within(document.querySelector('.ant-table-tbody'))
         .getAllByRole('button', { name: 'Adjust' })[0],
     )
-    await screen.findByText(/Adjust Stock/, { selector: '.ant-modal-title' })
+    await screen.findByRole('dialog')
 
     fireEvent.change(screen.getByLabelText('Delta'), { target: { value: '5' } })
 
@@ -188,6 +185,69 @@ describe('Inventory adjustments', () => {
     })
   })
 
+  it('selected row gets the row-adjusting class when Adjust is clicked', async () => {
+    vi.stubGlobal('fetch', makeFetch())
+    render(<Inventory />, { wrapper })
+
+    await screen.findByText('BAG-001-BRN')
+
+    fireEvent.click(
+      within(document.querySelector('.ant-table-tbody'))
+        .getAllByRole('button', { name: 'Adjust' })[0],
+    )
+
+    expect(
+      document.querySelector('tr[data-row-key="BAG-001-BRN"]'),
+    ).toHaveClass('row-adjusting')
+  })
+
+  it('other rows do not get the row-adjusting class', async () => {
+    vi.stubGlobal('fetch', makeFetch())
+    render(<Inventory />, { wrapper })
+
+    await screen.findByText('BAG-001-BRN')
+
+    fireEvent.click(
+      within(document.querySelector('.ant-table-tbody'))
+        .getAllByRole('button', { name: 'Adjust' })[0],
+    )
+
+    expect(
+      document.querySelector('tr[data-row-key="BAG-001-BLK"]'),
+    ).not.toHaveClass('row-adjusting')
+  })
+
+  it('row-adjusting class is removed after modal closes on success', async () => {
+    const fetchMock = makeFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    render(<Inventory />, { wrapper })
+
+    await screen.findByText('BAG-001-BRN')
+
+    fireEvent.click(
+      within(document.querySelector('.ant-table-tbody'))
+        .getAllByRole('button', { name: 'Adjust' })[0],
+    )
+    await screen.findByRole('dialog')
+
+    expect(
+      document.querySelector('tr[data-row-key="BAG-001-BRN"]'),
+    ).toHaveClass('row-adjusting')
+
+    fireEvent.change(screen.getByLabelText('Delta'), { target: { value: '1' } })
+
+    fireEvent.click(
+      within(document.querySelector('.ant-modal-footer'))
+        .getByRole('button', { name: 'Adjust' }),
+    )
+
+    await waitFor(() => {
+      expect(
+        document.querySelector('tr[data-row-key="BAG-001-BRN"]'),
+      ).not.toHaveClass('row-adjusting')
+    })
+  })
+
   it('shows inline error "Insufficient stock" on 422', async () => {
     const fetchMock = makeFetch({ putStatus: 422 })
     vi.stubGlobal('fetch', fetchMock)
@@ -199,7 +259,7 @@ describe('Inventory adjustments', () => {
       within(document.querySelector('.ant-table-tbody'))
         .getAllByRole('button', { name: 'Adjust' })[0],
     )
-    await screen.findByText(/Adjust Stock/, { selector: '.ant-modal-title' })
+    await screen.findByRole('dialog')
 
     fireEvent.change(screen.getByLabelText('Delta'), { target: { value: '-999' } })
 
