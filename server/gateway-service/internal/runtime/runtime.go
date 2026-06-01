@@ -10,6 +10,7 @@ import (
 	"github.com/jsanca/go-folio/gateway-service/internal/clients"
 	"github.com/jsanca/go-folio/gateway-service/internal/config"
 	"github.com/jsanca/go-folio/gateway-service/internal/middleware"
+	"github.com/jsanca/go-folio/gateway-service/internal/sse"
 )
 
 // GatewayRuntime holds all downstream clients for the gateway domain.
@@ -17,6 +18,7 @@ type GatewayRuntime struct {
 	Catalog           *clients.CatalogClient
 	Inventory         *clients.InventoryClient
 	Auth              *middleware.Verifier
+	Events            *sse.Broker
 	LowStockThreshold int
 	CORSOrigins       []string
 }
@@ -41,6 +43,7 @@ func NewGatewayRuntime(ctx context.Context, cfg config.Config) (*GatewayRuntime,
 		Catalog:           catalog,
 		Inventory:         inventory,
 		Auth:              auth,
+		Events:            sse.NewBroker(),
 		LowStockThreshold: cfg.LowStockThreshold,
 		CORSOrigins:       strings.Split(cfg.CORSAllowedOrigins, ","),
 	}, nil

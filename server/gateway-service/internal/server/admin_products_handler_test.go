@@ -17,10 +17,14 @@ import (
 	"testing"
 	"time"
 
+	invpb "github.com/jsanca/go-folio/gen/inventory"
 	"github.com/jsanca/go-folio/gateway-service/internal/clients"
 	"github.com/jsanca/go-folio/gateway-service/internal/middleware"
 	"github.com/jsanca/go-folio/gateway-service/internal/runtime"
 	"github.com/jsanca/go-folio/gateway-service/internal/server"
+	"github.com/jsanca/go-folio/gateway-service/internal/sse"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 const testKID = "test-key-1"
@@ -82,6 +86,7 @@ func buildRuntime(t *testing.T, catalogURL, keycloakURL string) *runtime.Gateway
 		Catalog:           clients.NewCatalogClient(catalogURL),
 		Inventory:         inv,
 		Auth:              auth,
+		Events:            sse.NewBroker(),
 		LowStockThreshold: 5,
 	}
 }
@@ -384,8 +389,16 @@ func TestAdminProductsHandler_ListProducts(t *testing.T) {
 // ── integration tests ─────────────────────────────────────────────────────────
 
 // TestAdminProducts_FullFields verifies that GET /admin/products returns the
-// full product shape including shortDescription, department, category, and active.
+// full product shape including shortDescription, department, category, active,
+// and that stock is hydrated from inventory-service (not the fallback values).
 func TestAdminProducts_FullFields(t *testing.T) {
+	fake := &fakeInventoryServer{
+		getStockFn: func(req *invpb.GetStockRequest) (*invpb.GetStockResponse, error) {
+			return &invpb.GetStockResponse{Sku: req.GetSku(), Available: 20, Reserved: 2}, nil
+		},
+	}
+	invAddr := startFakeInventorySrv(t, fake)
+
 	fullFixture := clients.CatalogProjection{
 		Product: clients.CatalogProduct{
 			ID:               2,
@@ -409,7 +422,7 @@ func TestAdminProducts_FullFields(t *testing.T) {
 	}))
 	t.Cleanup(catalog.Close)
 
-	rt := buildRuntime(t, catalog.URL, "")
+	rt := buildRuntimeWithInv(t, catalog.URL, invAddr, "") // permissive — no JWT check
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h := server.NewAdminProductsHandler(rt, logger)
 
@@ -429,6 +442,13 @@ func TestAdminProducts_FullFields(t *testing.T) {
 		Department       string `json:"department"`
 		Category         string `json:"category"`
 		Active           bool   `json:"active"`
+		Variants         []struct {
+			SKU   string `json:"sku"`
+			Stock struct {
+				Available int32  `json:"available"`
+				Status    string `json:"stockStatus"`
+			} `json:"stock"`
+		} `json:"variants"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&products); err != nil {
 		t.Fatal("decode response:", err)
@@ -448,6 +468,21 @@ func TestAdminProducts_FullFields(t *testing.T) {
 	}
 	if !p.Active {
 		t.Errorf("active: want true, got false")
+	}
+
+	// Verify stock is hydrated from inventory-service, not the OUT_OF_STOCK fallback.
+	if len(p.Variants) != 1 {
+		t.Fatalf("want 1 variant, got %d", len(p.Variants))
+	}
+	v := p.Variants[0]
+	if v.SKU != "WAL-001-BRN" {
+		t.Errorf("sku: want %q, got %q", "WAL-001-BRN", v.SKU)
+	}
+	if v.Stock.Available <= 0 {
+		t.Errorf("stock.available: want > 0, got %d", v.Stock.Available)
+	}
+	if v.Stock.Status == "OUT_OF_STOCK" {
+		t.Errorf("stock.stockStatus: want IN_STOCK or LOW_STOCK, got OUT_OF_STOCK")
 	}
 }
 
@@ -502,5 +537,172 @@ func TestAdminProductsHandler_AuthGates(t *testing.T) {
 				t.Errorf("want %d, got %d", tc.wantStatus, resp.StatusCode)
 			}
 		})
+	}
+}
+
+// ── POST /admin/products/{id}/variants saga tests ─────────────────────────────
+
+// sagaCatalogSrv builds a configurable catalog httptest.Server for saga tests.
+// postFn handles POST /catalog/products/*/variants.
+// deleteFn handles DELETE /catalog/products/*/variants/*.
+func sagaCatalogSrv(t *testing.T,
+	postFn func(w http.ResponseWriter, r *http.Request),
+	deleteFn func(w http.ResponseWriter, r *http.Request),
+) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isVariants := strings.Contains(r.URL.Path, "/variants")
+		switch {
+		case r.Method == http.MethodPost && isVariants && postFn != nil:
+			postFn(w, r)
+		case r.Method == http.MethodDelete && isVariants && deleteFn != nil:
+			deleteFn(w, r)
+		default:
+			// default catalog behaviour (product list etc.)
+			w.Header().Set("Content-Type", "application/json")
+			payload, _ := json.Marshal([]clients.CatalogProjection{fixtureProjection})
+			w.Write(payload) //nolint:errcheck
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// variantFixtureJSON is what catalog returns after a successful variant creation.
+const variantFixtureJSON = `{"sku":"BAG-001-RED","colorName":"Red","currency":"USD","active":true}`
+
+// TestAddVariantSaga_HappyPath verifies that POST /admin/products/{id}/variants
+// calls both catalog and inventory and returns 201 on success.
+func TestAddVariantSaga_HappyPath(t *testing.T) {
+	var inventorySeeded bool
+	fake := &fakeInventoryServer{
+		adjustStockFn: func(req *invpb.AdjustStockRequest) (*invpb.AdjustStockResponse, error) {
+			if req.Sku == "BAG-001-RED" && req.Delta == 0 {
+				inventorySeeded = true
+			}
+			return &invpb.AdjustStockResponse{Sku: req.Sku, Available: 0}, nil
+		},
+	}
+	invAddr := startFakeInventorySrv(t, fake)
+
+	var catalogCalled bool
+	catalog := sagaCatalogSrv(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			catalogCalled = true
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			io.WriteString(w, variantFixtureJSON) //nolint:errcheck
+		},
+		nil,
+	)
+
+	rt := buildRuntimeWithInv(t, catalog.URL, invAddr, "")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	gw := httptest.NewServer(server.New(rt, logger))
+	t.Cleanup(gw.Close)
+
+	body := strings.NewReader(`{"sku":"BAG-001-RED","retailPriceCents":1000,"currency":"USD"}`)
+	req, _ := http.NewRequest(http.MethodPost, gw.URL+"/admin/products/1/variants", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("want 201, got %d", resp.StatusCode)
+	}
+	if !catalogCalled {
+		t.Error("catalog POST /variants was not called")
+	}
+	if !inventorySeeded {
+		t.Error("inventory SeedSKU was not called with correct args")
+	}
+}
+
+// TestAddVariantSaga_InventoryFails verifies that when inventory seeding fails
+// the saga calls catalog DELETE (compensation) and returns 503.
+func TestAddVariantSaga_InventoryFails(t *testing.T) {
+	fake := &fakeInventoryServer{
+		adjustStockFn: func(_ *invpb.AdjustStockRequest) (*invpb.AdjustStockResponse, error) {
+			return nil, grpcstatus.Error(codes.Internal, "inventory unavailable")
+		},
+	}
+	invAddr := startFakeInventorySrv(t, fake)
+
+	var compensationCalled bool
+	catalog := sagaCatalogSrv(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			io.WriteString(w, variantFixtureJSON) //nolint:errcheck
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			compensationCalled = true
+			w.WriteHeader(http.StatusNoContent)
+		},
+	)
+
+	rt := buildRuntimeWithInv(t, catalog.URL, invAddr, "")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	gw := httptest.NewServer(server.New(rt, logger))
+	t.Cleanup(gw.Close)
+
+	body := strings.NewReader(`{"sku":"BAG-001-RED","retailPriceCents":1000,"currency":"USD"}`)
+	req, _ := http.NewRequest(http.MethodPost, gw.URL+"/admin/products/1/variants", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("want 503, got %d", resp.StatusCode)
+	}
+	if !compensationCalled {
+		t.Error("catalog DELETE /variants was not called as compensation")
+	}
+}
+
+// TestAddVariantSaga_CompensationFails verifies that when both inventory seeding
+// and catalog compensation fail the handler still returns 503.
+func TestAddVariantSaga_CompensationFails(t *testing.T) {
+	fake := &fakeInventoryServer{
+		adjustStockFn: func(_ *invpb.AdjustStockRequest) (*invpb.AdjustStockResponse, error) {
+			return nil, grpcstatus.Error(codes.Internal, "inventory unavailable")
+		},
+	}
+	invAddr := startFakeInventorySrv(t, fake)
+
+	catalog := sagaCatalogSrv(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			io.WriteString(w, variantFixtureJSON) //nolint:errcheck
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			// compensation itself fails
+			w.WriteHeader(http.StatusInternalServerError)
+		},
+	)
+
+	rt := buildRuntimeWithInv(t, catalog.URL, invAddr, "")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	gw := httptest.NewServer(server.New(rt, logger))
+	t.Cleanup(gw.Close)
+
+	body := strings.NewReader(`{"sku":"BAG-001-RED","retailPriceCents":1000,"currency":"USD"}`)
+	req, _ := http.NewRequest(http.MethodPost, gw.URL+"/admin/products/1/variants", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("want 503, got %d", resp.StatusCode)
 	}
 }

@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	invpb "github.com/jsanca/go-folio/gen/inventory"
 	"github.com/jsanca/go-folio/gateway-service/internal/runtime"
+	"github.com/jsanca/go-folio/gateway-service/internal/sse"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -112,9 +114,29 @@ func (h *AdminInventoryHandler) adjustStock(w http.ResponseWriter, r *http.Reque
 		}
 		return
 	}
+	h.rt.Events.Publish(sse.StockEvent{
+		EventType:  deriveEventType(resp.Available, int32(h.rt.LowStockThreshold)),
+		SKU:        sku,
+		Available:  resp.Available,
+		Reserved:   0,
+		Status:     deriveStockStatus(resp.Available, h.rt.LowStockThreshold),
+		OccurredAt: time.Now().UTC(),
+	})
 	writeJSON(w, http.StatusOK, adjustStockResponse{
 		SKU:       resp.Sku,
 		Available: resp.Available,
 		Status:    deriveStockStatus(resp.Available, h.rt.LowStockThreshold),
 	})
+}
+
+// deriveEventType maps available stock to a named event type.
+func deriveEventType(available int32, threshold int32) string {
+	switch {
+	case available == 0:
+		return "stock.out"
+	case available <= threshold:
+		return "stock.low"
+	default:
+		return "stock.updated"
+	}
 }

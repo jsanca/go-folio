@@ -2,7 +2,6 @@ import { Routes, Route, Navigate, Link, useLocation } from 'react-router-dom'
 import { Layout, Menu, Button, Typography, theme } from 'antd'
 import {
   AppstoreOutlined,
-  InboxOutlined,
   LogoutOutlined,
   UserOutlined,
 } from '@ant-design/icons'
@@ -10,7 +9,6 @@ import keycloak from './lib/keycloak'
 import ProtectedRoute from './components/ProtectedRoute'
 import Login from './pages/Login'
 import Products from './pages/Products'
-import Inventory from './pages/Inventory'
 
 const { Sider, Header, Content } = Layout
 
@@ -24,11 +22,6 @@ function AdminShell() {
       key: '/products',
       icon: <AppstoreOutlined />,
       label: <Link to="/products">Products</Link>,
-    },
-    {
-      key: '/inventory',
-      icon: <InboxOutlined />,
-      label: <Link to="/inventory">Inventory</Link>,
     },
   ]
 
@@ -88,7 +81,6 @@ function AdminShell() {
             <Route index element={<Navigate to="/products" replace />} />
             <Route element={<ProtectedRoute />}>
               <Route path="/products" element={<Products />} />
-              <Route path="/inventory" element={<Inventory />} />
             </Route>
             <Route path="*" element={<Navigate to="/products" replace />} />
           </Routes>

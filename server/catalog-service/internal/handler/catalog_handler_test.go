@@ -27,6 +27,7 @@ type stubCatalogSvc struct {
 	deleteProductFn   func(ctx context.Context, id int64) error
 	getVariantBySKUFn func(ctx context.Context, sku string) (*domain.ProductVariant, error)
 	getProductByIDFn  func(ctx context.Context, id int64) (*domain.Product, error)
+	addVariantFn      func(ctx context.Context, v *domain.ProductVariant) (*domain.ProductVariant, error)
 }
 
 func (s *stubCatalogSvc) CreateProduct(ctx context.Context, p *domain.Product) (*domain.Product, error) {
@@ -55,6 +56,9 @@ func (s *stubCatalogSvc) DeleteProduct(ctx context.Context, id int64) error {
 	return nil
 }
 func (s *stubCatalogSvc) AddVariantToProduct(ctx context.Context, v *domain.ProductVariant) (*domain.ProductVariant, error) {
+	if s.addVariantFn != nil {
+		return s.addVariantFn(ctx, v)
+	}
 	return nil, nil
 }
 func (s *stubCatalogSvc) GetVariantBySKU(ctx context.Context, sku string) (*domain.ProductVariant, error) {
@@ -620,5 +624,127 @@ func TestCatalogHandler_GetVariantBySKU_NotFound(t *testing.T) {
 	errObj, _ := m["error"].(map[string]any)
 	if errObj["code"] != "NOT_FOUND" {
 		t.Errorf("expected NOT_FOUND, got %v", errObj["code"])
+	}
+}
+
+// ── POST /catalog/products/{id}/variants handler tests ────────────────────────
+
+func TestAddVariant_HappyPath(t *testing.T) {
+	price := int64(2439000)
+	svc := &stubCatalogSvc{
+		getProductByIDFn: func(_ context.Context, id int64) (*domain.Product, error) {
+			return &domain.Product{ID: id, ProductCode: "BM-02", Title: "Billetera", Slug: "billetera"}, nil
+		},
+		addVariantFn: func(_ context.Context, v *domain.ProductVariant) (*domain.ProductVariant, error) {
+			v.ID = 99
+			return v, nil
+		},
+	}
+	body := `{"sku":"BM-02-COL-CO-RO","colorName":"Rojo","colorSlug":"rojo","primaryColorHex":"#ff0000","retailPriceCents":2439000,"currency":"CRC","active":true}`
+	req := httptest.NewRequest(http.MethodPost, "/catalog/products/1/variants", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	newCatalogRouter(svc).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Errorf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var v struct {
+		ID       int64  `json:"id"`
+		SKU      string `json:"sku"`
+		Currency string `json:"currency"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if v.SKU != "BM-02-COL-CO-RO" {
+		t.Errorf("sku: want BM-02-COL-CO-RO, got %s", v.SKU)
+	}
+	if v.Currency != "CRC" {
+		t.Errorf("currency: want CRC, got %s", v.Currency)
+	}
+	_ = price
+}
+
+func TestAddVariant_DuplicateSKU_Returns409(t *testing.T) {
+	svc := &stubCatalogSvc{
+		getProductByIDFn: func(_ context.Context, id int64) (*domain.Product, error) {
+			return &domain.Product{ID: id}, nil
+		},
+		addVariantFn: func(_ context.Context, _ *domain.ProductVariant) (*domain.ProductVariant, error) {
+			return nil, repository.ErrDuplicateSKU
+		},
+	}
+	body := `{"sku":"DUPE-SKU","retailPriceCents":1000,"currency":"CRC"}`
+	req := httptest.NewRequest(http.MethodPost, "/catalog/products/1/variants", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	newCatalogRouter(svc).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("expected 409, got %d", rec.Code)
+	}
+	var m map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &m) //nolint:errcheck
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "CONFLICT" {
+		t.Errorf("expected CONFLICT, got %v", errObj["code"])
+	}
+}
+
+func TestAddVariant_ProductNotFound_Returns404(t *testing.T) {
+	svc := &stubCatalogSvc{
+		getProductByIDFn: func(_ context.Context, _ int64) (*domain.Product, error) {
+			return nil, repository.ErrProductNotFound
+		},
+	}
+	body := `{"sku":"BM-02-COL-CO-RO","retailPriceCents":2439000,"currency":"CRC"}`
+	req := httptest.NewRequest(http.MethodPost, "/catalog/products/999/variants", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	newCatalogRouter(svc).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+	var m map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &m) //nolint:errcheck
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "NOT_FOUND" {
+		t.Errorf("expected NOT_FOUND, got %v", errObj["code"])
+	}
+}
+
+func TestAddVariant_MissingRequiredFields_Returns400(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"missing sku", `{"retailPriceCents":1000,"currency":"CRC"}`},
+		{"missing retailPriceCents", `{"sku":"X","currency":"CRC"}`},
+		{"missing currency", `{"sku":"X","retailPriceCents":1000}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &stubCatalogSvc{
+				getProductByIDFn: func(_ context.Context, id int64) (*domain.Product, error) {
+					return &domain.Product{ID: id}, nil
+				},
+			}
+			req := httptest.NewRequest(http.MethodPost, "/catalog/products/1/variants", bytes.NewBufferString(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			newCatalogRouter(svc).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("%s: expected 400, got %d", tc.name, rec.Code)
+			}
+			var m map[string]any
+			json.Unmarshal(rec.Body.Bytes(), &m) //nolint:errcheck
+			errObj, _ := m["error"].(map[string]any)
+			if errObj["code"] != "INVALID_REQUEST" {
+				t.Errorf("%s: expected INVALID_REQUEST, got %v", tc.name, errObj["code"])
+			}
+		})
 	}
 }

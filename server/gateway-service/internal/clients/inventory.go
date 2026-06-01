@@ -1,6 +1,7 @@
 package clients
 
 import (
+	"context"
 	"fmt"
 
 	invpb "github.com/jsanca/go-folio/gen/inventory"
@@ -26,6 +27,17 @@ func NewInventoryClient(addr string) (*InventoryClient, error) {
 		conn: conn,
 		Svc:  invpb.NewInventoryServiceClient(conn),
 	}, nil
+}
+
+// SeedSKU registers a SKU in inventory-service with zero stock by applying a
+// delta of 0. This is the saga step that follows variant creation in catalog.
+func (c *InventoryClient) SeedSKU(ctx context.Context, sku string) error {
+	_, err := c.Svc.AdjustStock(ctx, &invpb.AdjustStockRequest{
+		Sku:    sku,
+		Delta:  0,
+		Reason: "saga: variant created",
+	})
+	return err
 }
 
 // Close releases the underlying gRPC connection.

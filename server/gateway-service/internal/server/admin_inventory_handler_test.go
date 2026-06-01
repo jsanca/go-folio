@@ -10,12 +10,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	invpb "github.com/jsanca/go-folio/gen/inventory"
 	"github.com/jsanca/go-folio/gateway-service/internal/clients"
 	"github.com/jsanca/go-folio/gateway-service/internal/middleware"
 	"github.com/jsanca/go-folio/gateway-service/internal/runtime"
 	"github.com/jsanca/go-folio/gateway-service/internal/server"
+	"github.com/jsanca/go-folio/gateway-service/internal/sse"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -87,6 +89,7 @@ func buildRuntimeWithInv(t *testing.T, catalogURL, inventoryAddr, keycloakURL st
 		Catalog:           clients.NewCatalogClient(catalogURL),
 		Inventory:         inv,
 		Auth:              auth,
+		Events:            sse.NewBroker(),
 		LowStockThreshold: 5,
 	}
 }
@@ -414,5 +417,83 @@ func TestAdminInventory_AuthGates(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// ── SSE publish after adjustStock ─────────────────────────────────────────────
+
+// adjustAndCapture performs a PUT /admin/inventory/{sku} and returns the first
+// StockEvent received by a broker subscriber, or fails the test on timeout.
+func adjustAndCapture(t *testing.T, gw *httptest.Server, token, sku, body string, rt *runtime.GatewayRuntime) sse.StockEvent {
+	t.Helper()
+	ch := rt.Events.Subscribe()
+	t.Cleanup(func() { rt.Events.Unsubscribe(ch) })
+
+	req, _ := http.NewRequest(http.MethodPut, gw.URL+"/admin/inventory/"+sku, strings.NewReader(body))
+	req.Header.Set("Authorization", token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("adjust: want 200, got %d", resp.StatusCode)
+	}
+
+	select {
+	case event := <-ch:
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SSE event")
+		return sse.StockEvent{}
+	}
+}
+
+// TestAdjustStock_PublishesEvent verifies that a successful adjustment publishes
+// a StockEvent with the correct SKU, available count, and eventType.
+func TestAdjustStock_PublishesEvent(t *testing.T) {
+	tests := []struct {
+		name          string
+		available     int32
+		wantEventType string
+	}{
+		{"stock.updated when above threshold", 10, "stock.updated"},
+		{"stock.low when at threshold", 5, "stock.low"},
+		{"stock.low when below threshold", 3, "stock.low"},
+		{"stock.out when zero", 0, "stock.out"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeInventoryServer{
+				adjustStockFn: func(req *invpb.AdjustStockRequest) (*invpb.AdjustStockResponse, error) {
+					return &invpb.AdjustStockResponse{Sku: req.Sku, Available: tc.available}, nil
+				},
+			}
+			addr := startFakeInventorySrv(t, fake)
+			catalog := fakeCatalogSrv(t)
+			oidcURL, signToken := testOIDCSrv(t)
+			rt := buildRuntimeWithInv(t, catalog.URL, addr, oidcURL)
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+			gw := httptest.NewServer(server.New(rt, logger))
+			t.Cleanup(gw.Close)
+
+			event := adjustAndCapture(t, gw, "Bearer "+signToken("admin"), "BAG-001", `{"delta":1,"reason":"test"}`, rt)
+
+			if event.SKU != "BAG-001" {
+				t.Errorf("SKU: want %q, got %q", "BAG-001", event.SKU)
+			}
+			if event.Available != tc.available {
+				t.Errorf("Available: want %d, got %d", tc.available, event.Available)
+			}
+			if event.EventType != tc.wantEventType {
+				t.Errorf("EventType: want %q, got %q", tc.wantEventType, event.EventType)
+			}
+			if event.OccurredAt.IsZero() {
+				t.Error("OccurredAt must not be zero")
+			}
+		})
 	}
 }

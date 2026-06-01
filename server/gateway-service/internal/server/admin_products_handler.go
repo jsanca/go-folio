@@ -1,11 +1,14 @@
 package server
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jsanca/go-folio/gateway-service/internal/clients"
 	"github.com/jsanca/go-folio/gateway-service/internal/runtime"
 )
 
@@ -97,6 +100,45 @@ func (h *AdminProductsHandler) updateProduct(w http.ResponseWriter, r *http.Requ
 func (h *AdminProductsHandler) deleteProduct(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	h.proxyTo(w, r, http.MethodDelete, "/products/"+id, nil)
+}
+
+// addVariant implements a choreographed saga:
+//  1. Create the variant in catalog-service.
+//  2. Seed the SKU in inventory-service (delta=0).
+//     If step 2 fails, compensate by deleting the variant from catalog.
+func (h *AdminProductsHandler) addVariant(w http.ResponseWriter, r *http.Request) {
+	productID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid product id")
+		return
+	}
+
+	// Step 1: create variant in catalog.
+	variant, err := h.ph.rt.Catalog.AddVariant(r.Context(), productID, r.Body)
+	if err != nil {
+		var catErr *clients.CatalogError
+		if errors.As(err, &catErr) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(catErr.Status)
+			w.Write(catErr.Body) //nolint:errcheck
+			return
+		}
+		h.ph.logger.Error("saga: catalog add variant failed", "productID", productID, "err", err)
+		writeError(w, http.StatusBadGateway, "UPSTREAM_ERROR", "failed to create variant in catalog")
+		return
+	}
+
+	// Step 2: seed SKU in inventory.
+	if err := h.ph.rt.Inventory.SeedSKU(r.Context(), variant.SKU); err != nil {
+		h.ph.logger.Error("saga: inventory failed, compensating", "sku", variant.SKU, "productID", productID, "err", err)
+		if compErr := h.ph.rt.Catalog.DeleteVariant(r.Context(), productID, variant.SKU); compErr != nil {
+			h.ph.logger.Error("saga: compensation failed, manual reconciliation needed", "sku", variant.SKU, "productID", productID, "err", compErr)
+		}
+		writeError(w, http.StatusServiceUnavailable, "UPSTREAM_ERROR", "failed to register variant in inventory")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, variant)
 }
 
 // proxyTo forwards a request to the catalog-service and writes the upstream

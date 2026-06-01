@@ -53,9 +53,11 @@ describe('Products', () => {
     expect(screen.getByText('BELT-001')).toBeInTheDocument()
     expect(screen.getByText('Classic Belt')).toBeInTheDocument()
 
-    // BAG-001: all variants active → Yes; BELT-001: one inactive → No
-    expect(screen.getAllByText('Yes')).toHaveLength(1)
-    expect(screen.getAllByText('No')).toHaveLength(1)
+    // BAG-001: all variants active → Active; BELT-001: one inactive → Inactive
+    // Scope to tbody to avoid matching the "Active" column header <th>.
+    const tbody = document.querySelector('.ant-table-tbody')
+    expect(within(tbody).getAllByText('Active')).toHaveLength(1)
+    expect(within(tbody).getAllByText('Inactive')).toHaveLength(1)
   })
 
   it('shows a spinner while loading', async () => {
@@ -282,5 +284,77 @@ describe('Products mutations', () => {
       ).length
       expect(getCount).toBeGreaterThan(initialGetCount)
     })
+  })
+})
+
+describe('Products expandable rows', () => {
+  const productWithVariants = {
+    id: 10,
+    productCode: 'WALLET-001',
+    title: 'Slim Wallet',
+    slug: 'slim-wallet',
+    variants: [
+      {
+        sku: 'WALLET-001-BRN-OS',
+        colorName: 'Brown',
+        active: true,
+        retailPrice: { amountCents: 4999, currency: 'USD' },
+        stock: { available: 12, reserved: 0, stockStatus: 'IN_STOCK' },
+      },
+      {
+        sku: 'WALLET-001-BLK-OS',
+        colorName: 'Black',
+        active: true,
+        retailPrice: { amountCents: 4999, currency: 'USD' },
+        stock: { available: 3, reserved: 1, stockStatus: 'LOW_STOCK' },
+      },
+    ],
+  }
+
+  const productNoVariants = {
+    id: 11,
+    productCode: 'EMPTY-001',
+    title: 'No Variants',
+    slug: 'no-variants',
+    variants: [],
+  }
+
+  function makeExpandFetch(products) {
+    return vi.fn().mockResolvedValue({ ok: true, json: async () => products })
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('expanded row renders variant SKU and stock status', async () => {
+    vi.stubGlobal('fetch', makeExpandFetch([productWithVariants]))
+
+    render(<Products />, { wrapper })
+    await screen.findByText('WALLET-001')
+
+    // Click the expand button for the row
+    const expandBtn = document.querySelector('button.ant-table-row-expand-icon')
+    fireEvent.click(expandBtn)
+
+    await screen.findByText('WALLET-001-BRN-OS')
+    expect(screen.getByText('WALLET-001-BLK-OS')).toBeInTheDocument()
+    expect(screen.getByText('In Stock')).toBeInTheDocument()
+    expect(screen.getByText('Low Stock')).toBeInTheDocument()
+  })
+
+  it('row with 0 variants is not expandable', async () => {
+    vi.stubGlobal('fetch', makeExpandFetch([productWithVariants, productNoVariants]))
+
+    render(<Products />, { wrapper })
+    await screen.findByText('WALLET-001')
+
+    // The row with variants has ant-table-row-expand-icon-collapsed; the empty
+    // row still renders a button but with ant-table-row-expand-icon-spanned
+    // (Ant Design's "not expandable" marker). Only the collapsed variant counts.
+    const clickableExpanders = document.querySelectorAll(
+      'button.ant-table-row-expand-icon-collapsed',
+    )
+    expect(clickableExpanders).toHaveLength(1)
   })
 })

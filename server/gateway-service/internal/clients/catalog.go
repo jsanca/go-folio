@@ -9,10 +9,22 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 )
 
 // ErrNotFound is returned when catalog-service responds with 404.
 var ErrNotFound = errors.New("catalog: not found")
+
+// CatalogError is returned by catalog client methods when the upstream responds
+// with a non-2xx status. It carries the raw status code and body so the gateway
+// can forward catalog's error shape to the caller unchanged.
+type CatalogError struct {
+	Status int
+	Body   []byte
+}
+
+// Error implements the error interface.
+func (e *CatalogError) Error() string { return fmt.Sprintf("catalog: HTTP %d", e.Status) }
 
 // CatalogMoney mirrors catalog-service's Money JSON shape.
 type CatalogMoney struct {
@@ -130,6 +142,39 @@ func (c *CatalogClient) ProxyRequest(ctx context.Context, method, path string, b
 		return 0, nil, fmt.Errorf("read proxy response: %w", err)
 	}
 	return resp.StatusCode, b, nil
+}
+
+// AddVariant creates a product variant in catalog-service.
+// Returns *CatalogError if catalog responds with a non-201 status so the
+// caller can forward the upstream body and code unchanged.
+func (c *CatalogClient) AddVariant(ctx context.Context, productID int64, body io.Reader) (*CatalogVariant, error) {
+	path := "/catalog/products/" + strconv.FormatInt(productID, 10) + "/variants"
+	statusCode, respBody, err := c.ProxyRequest(ctx, http.MethodPost, path, body)
+	if err != nil {
+		return nil, fmt.Errorf("add variant: %w", err)
+	}
+	if statusCode != http.StatusCreated {
+		return nil, &CatalogError{Status: statusCode, Body: respBody}
+	}
+	var v CatalogVariant
+	if err := json.Unmarshal(respBody, &v); err != nil {
+		return nil, fmt.Errorf("decode add variant response: %w", err)
+	}
+	return &v, nil
+}
+
+// DeleteVariant removes a variant from catalog-service by SKU.
+// Used as the compensating transaction when inventory seeding fails.
+func (c *CatalogClient) DeleteVariant(ctx context.Context, productID int64, sku string) error {
+	path := "/catalog/products/" + strconv.FormatInt(productID, 10) + "/variants/" + url.PathEscape(sku)
+	statusCode, _, err := c.ProxyRequest(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return fmt.Errorf("delete variant: %w", err)
+	}
+	if statusCode != http.StatusNoContent && statusCode != http.StatusOK {
+		return fmt.Errorf("delete variant: unexpected status %d", statusCode)
+	}
+	return nil
 }
 
 // Close is a no-op; http.Client holds no persistent connection to release.

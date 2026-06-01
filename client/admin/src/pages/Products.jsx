@@ -12,8 +12,11 @@ import {
   message,
 } from 'antd'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { CheckCircleOutlined, StopOutlined } from '@ant-design/icons'
 import { useAuth } from '../lib/useAuth'
 import ProductForm from '../components/ProductForm'
+import VariantForm from '../components/VariantForm'
+import VariantStockTable from '../components/VariantStockTable'
 
 const GATEWAY =
   import.meta.env.VITE_PUBLIC_GATEWAY_URL ?? 'http://localhost:8090'
@@ -70,6 +73,7 @@ export default function Products() {
   const [form] = Form.useForm()
   const [modalOpen, setModalOpen] = useState(false)
   const [editingProduct, setEditingProduct] = useState(null)
+  const [variantProductId, setVariantProductId] = useState(null)
 
   const { data, isPending, isError, error } = useQuery({
     queryKey: ['admin-products'],
@@ -174,7 +178,9 @@ export default function Products() {
         const vs = record.variants ?? []
         const active = vs.length > 0 && vs.every((v) => v.active)
         return (
-          <Tag color={active ? 'green' : 'default'}>{active ? 'Yes' : 'No'}</Tag>
+          <Tag icon={active ? <CheckCircleOutlined /> : <StopOutlined />} color={active ? 'green' : 'default'}>
+            {active ? 'Active' : 'Inactive'}
+          </Tag>
         )
       },
     },
@@ -186,6 +192,9 @@ export default function Products() {
         <Space>
           <Button size="small" onClick={() => openEdit(record)}>
             Edit
+          </Button>
+          <Button size="small" onClick={() => setVariantProductId(record.id)}>
+            Add Variant
           </Button>
           <Button size="small" danger onClick={() => handleDelete(record)}>
             Delete
@@ -234,8 +243,20 @@ export default function Products() {
           dataSource={data ?? []}
           rowKey="id"
           pagination={false}
+          expandable={{
+            expandedRowRender: (record) => (
+              <VariantStockTable variants={record.variants} />
+            ),
+            rowExpandable: (record) => record.variants?.length > 0,
+          }}
         />
       )}
+
+      <VariantForm
+        productId={variantProductId}
+        open={variantProductId !== null}
+        onClose={() => setVariantProductId(null)}
+      />
 
       <Modal
         title={editingProduct ? 'Edit Product' : 'Create Product'}

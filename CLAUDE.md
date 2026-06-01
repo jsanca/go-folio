@@ -10,6 +10,7 @@ The repo is split into `server/` (Go workspace) and `client/` (two React SPAs). 
 # Run tests for a single service
 cd server/catalog-service && go test ./...
 cd server/inventory-service && go test ./...
+cd server/gateway-service && go test ./...
 
 # Run a single test
 cd server/catalog-service && go test ./internal/service/ -run TestCatalogService_ListProducts
@@ -83,28 +84,47 @@ seed/         → Idempotent seed data applied at startup
 ### Inventory-service layers (inside `internal/`)
 
 ```
+domain/       → Pure types: Stock, Reservation
+repository/   → Repository interface + PostgreSQL impl; WithTx pattern for transaction scoping
+service/      → Implements generated gRPC interface; owns transaction lifecycle via withTx helper
 config/       → Env var config (DATABASE_URL, PORT)
 database/     → PostgreSQL connection via pgx/v5/stdlib + migrations
-inventory/    → Domain types, PostgresRepository, service (implements generated gRPC interface)
-runtime/      → Composition root — wires repo + service into InventoryRuntime; CompositeRuntime for lifecycle
 observability/→ Structured logging (slog)
+runtime/      → Composition root — wires repo + service into InventoryRuntime; CompositeRuntime for lifecycle
 seed/         → Startup seed data
-server/       → gRPC server wiring
+server/       → gRPC server wiring (grpc.go)
 ```
 
 `runtime.NewInventoryRuntime` is the single wiring point, mirroring the catalog-service pattern.
 
+The service layer owns transactions (not the repository). `Repository.WithTx(*sql.Tx)` returns a transaction-scoped copy; a private `withTx` helper on the service handles `BeginTx`, commit, and rollback uniformly. Only inventory-service uses this pattern — catalog operations are currently single-row.
+
 ### Gateway-service layers (inside `internal/`)
 
 ```
-config/       → Env var config (PORT, CATALOG_URL, INVENTORY_ADDR, LOW_STOCK_THRESHOLD)
+config/       → Env var config (PORT, CATALOG_URL, INVENTORY_ADDR, LOW_STOCK_THRESHOLD, KEYCLOAK_URL, KEYCLOAK_REALM)
 observability/→ Structured logging (slog)
+middleware/   → auth.go — OIDC token verifier (RequireAuth, RequireRole); nil inner verifier = permissive mode
 clients/      → catalog.go (HTTP) and inventory.go (gRPC); both implement io.Closer
-runtime/      → Composition root — wires clients into GatewayRuntime; CompositeRuntime for lifecycle
-server/       → server.go (chi setup) + routes.go + products.go (handlers) + response.go (writeJSON/writeError)
+runtime/      → Composition root — wires clients + auth verifier into GatewayRuntime; CompositeRuntime for lifecycle
+server/       → server.go (chi setup) + routes.go + handlers per concern + response.go (writeJSON/writeError)
 ```
 
 `runtime.NewGatewayRuntime` is the wiring point. It returns an error because `grpc.NewClient` can fail on invalid options. The gRPC connection itself is lazy — no network traffic until the first RPC call.
+
+**Auth routes:**
+
+| Route | Auth |
+|---|---|
+| `GET /products` | Public |
+| `GET /products/{id}` | Public |
+| `GET /admin/products` | `admin` role |
+| `POST /admin/products` | `admin` role |
+| `PATCH /admin/products/{id}` | `admin` role |
+| `DELETE /admin/products/{id}` | `admin` role |
+| `GET /admin/inventory` | `admin` role |
+| `GET /admin/inventory/{sku}` | `admin` role |
+| `PUT /admin/inventory/{sku}` | `admin` role |
 
 ## Go Code Quality
 
@@ -133,6 +153,8 @@ server/       → server.go (chi setup) + routes.go + products.go (handlers) + r
 - Realm roles: `admin`, `customer`.
 - Test users: `admin@folio.dev / admin123` (admin role), `customer@folio.dev / customer123` (customer role).
 - `KC_HOSTNAME_URL=http://keycloak:8080` pins the JWT issuer to the Docker-internal URL; gateway uses `SkipIssuerCheck: true` for dev.
+- **Permissive mode:** when `KEYCLOAK_URL` is unset the gateway's `middleware.Verifier` holds a nil inner verifier — all requests pass without authentication. Useful for running locally without Keycloak.
+- **Port note:** `docker compose` exposes Keycloak on host port `8080`. The admin SPA defaults to `http://localhost:8180` when `VITE_KEYCLOAK_URL` is not set. When running the client outside Docker, set `VITE_KEYCLOAK_URL=http://localhost:8080` to match the compose port.
 
 **To re-export the realm** (after changes in the Admin UI):
 ```bash

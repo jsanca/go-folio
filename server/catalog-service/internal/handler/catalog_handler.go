@@ -30,6 +30,7 @@ func (h *CatalogHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/products", h.createProduct)
 	r.Patch("/products/{id}", h.updateProduct)
 	r.Delete("/products/{id}", h.deleteProduct)
+	r.Post("/catalog/products/{id}/variants", h.addVariant)
 	r.Get("/catalog/product-projections", h.listProductProjections)
 	r.Get("/catalog/variant-inventory", h.listVariantInventory)
 	r.Get("/catalog/variants/{sku}", h.getVariantBySKU)
@@ -199,6 +200,57 @@ func (h *CatalogHandler) deleteProduct(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// createVariantRequest is the body for POST /catalog/products/{id}/variants.
+type createVariantRequest struct {
+	SKU              string `json:"sku"`
+	ColorName        string `json:"colorName"`
+	ColorSlug        string `json:"colorSlug"`
+	PrimaryColorHex  string `json:"primaryColorHex"`
+	RetailPriceCents *int64 `json:"retailPriceCents"`
+	Currency         string `json:"currency"`
+	Active           bool   `json:"active"`
+}
+
+func (h *CatalogHandler) addVariant(w http.ResponseWriter, r *http.Request) {
+	productID, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	var req createVariantRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
+		return
+	}
+	if req.SKU == "" || req.RetailPriceCents == nil || req.Currency == "" {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "sku, retailPriceCents, and currency are required")
+		return
+	}
+	if _, err := h.svc.GetProductByID(r.Context(), productID); err != nil {
+		if errors.Is(err, repository.ErrProductNotFound) {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "product not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "internal server error")
+		return
+	}
+	v := &domain.ProductVariant{
+		ProductID:       productID,
+		SKU:             req.SKU,
+		ColorName:       req.ColorName,
+		ColorSlug:       req.ColorSlug,
+		PrimaryColorHex: req.PrimaryColorHex,
+		RetailPrice:     domain.Money{AmountCents: *req.RetailPriceCents},
+		Currency:        req.Currency,
+		Active:          req.Active,
+	}
+	created, err := h.svc.AddVariantToProduct(r.Context(), v)
+	if err != nil {
+		handleVariantMutationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // parsePageSizeQP parses the pageSize query param. Returns 0 (meaning "use service default")
@@ -260,6 +312,18 @@ func handleProductMutationError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	case errors.Is(err, repository.ErrDuplicateProductCode), errors.Is(err, repository.ErrDuplicateSlug):
 		writeError(w, http.StatusConflict, "CONFLICT", err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "internal server error")
+	}
+}
+
+// handleVariantMutationError maps variant mutation errors to HTTP responses.
+func handleVariantMutationError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, repository.ErrDuplicateSKU):
+		writeError(w, http.StatusConflict, "CONFLICT", err.Error())
+	case errors.Is(err, service.ErrInvalidVariant):
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "internal server error")
 	}
