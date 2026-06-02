@@ -38,11 +38,12 @@ type variantResponse struct {
 }
 
 type productResponse struct {
-	ID          int64             `json:"id"`
-	ProductCode string            `json:"productCode"`
-	Title       string            `json:"title"`
-	Slug        string            `json:"slug"`
-	Variants    []variantResponse `json:"variants"`
+	ID              int64             `json:"id"`
+	ProductCode     string            `json:"productCode"`
+	Title           string            `json:"title"`
+	Slug            string            `json:"slug"`
+	PrimaryImageURL string            `json:"primaryImageUrl"`
+	Variants        []variantResponse `json:"variants"`
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -90,11 +91,12 @@ func (h *ProductsHandler) listProducts(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		result = append(result, productResponse{
-			ID:          proj.Product.ID,
-			ProductCode: proj.Product.ProductCode,
-			Title:       proj.Product.Title,
-			Slug:        proj.Product.Slug,
-			Variants:    variants,
+			ID:              proj.Product.ID,
+			ProductCode:     proj.Product.ProductCode,
+			Title:           proj.Product.Title,
+			Slug:            proj.Product.Slug,
+			PrimaryImageURL: proj.Product.PrimaryImageURL,
+			Variants:        variants,
 		})
 	}
 	writeJSON(w, http.StatusOK, result)

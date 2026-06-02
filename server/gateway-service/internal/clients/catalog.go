@@ -52,6 +52,7 @@ type CatalogProduct struct {
 	ShortDescription string `json:"shortDescription"`
 	Department       string `json:"department"`
 	Category         string `json:"category"`
+	PrimaryImageURL  string `json:"primaryImageUrl"`
 	Active           bool   `json:"active"`
 }
 

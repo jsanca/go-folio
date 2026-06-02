@@ -125,8 +125,8 @@ func createProduct(ctx context.Context, q querier, p *domain.Product) (*domain.P
 		INSERT INTO catalog_products
 			(product_code, external_product_id, title, slug, short_description,
 			 description, additional_info, department, category, subcategory,
-			 tags, base_sku, active)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			 tags, base_sku, primary_image_url, active)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		RETURNING id`
 
 	var id int64
@@ -134,7 +134,7 @@ func createProduct(ctx context.Context, q querier, p *domain.Product) (*domain.P
 		p.ProductCode, nullableString(p.ExternalProductID), p.Title, p.Slug,
 		p.ShortDescription, p.Description, p.AdditionalInfo,
 		p.Department, p.Category, p.Subcategory,
-		string(tags), nullableString(p.BaseSKU), p.Active,
+		string(tags), nullableString(p.BaseSKU), p.PrimaryImageURL, p.Active,
 	).Scan(&id)
 	if err != nil {
 		return nil, mapCatalogPgError(err, "create product")
@@ -147,7 +147,7 @@ func getProductByID(ctx context.Context, q querier, id int64) (*domain.Product, 
 		SELECT id, product_code, external_product_id, title, slug,
 		       short_description, description, additional_info,
 		       department, category, subcategory, tags, base_sku,
-		       active, created_at, updated_at, last_synced_at
+		       primary_image_url, active, created_at, updated_at, last_synced_at
 		FROM catalog_products WHERE id = $1`
 
 	row := q.QueryRowContext(ctx, query, id)
@@ -163,7 +163,7 @@ func getProductByIDForUpdate(ctx context.Context, q querier, id int64) (*domain.
 		SELECT id, product_code, external_product_id, title, slug,
 		       short_description, description, additional_info,
 		       department, category, subcategory, tags, base_sku,
-		       active, created_at, updated_at, last_synced_at
+		       primary_image_url, active, created_at, updated_at, last_synced_at
 		FROM catalog_products WHERE id = $1 FOR UPDATE`
 
 	row := q.QueryRowContext(ctx, query, id)
@@ -185,14 +185,14 @@ func updateProduct(ctx context.Context, q querier, id int64, p *domain.Product) 
 		    product_code = $1, title = $2, slug = $3,
 		    short_description = $4, description = $5, additional_info = $6,
 		    department = $7, category = $8, subcategory = $9,
-		    tags = $10, base_sku = $11, active = $12, updated_at = NOW()
-		WHERE id = $13`
+		    tags = $10, base_sku = $11, primary_image_url = $12, active = $13, updated_at = NOW()
+		WHERE id = $14`
 
 	res, err := q.ExecContext(ctx, query,
 		p.ProductCode, p.Title, p.Slug,
 		p.ShortDescription, p.Description, p.AdditionalInfo,
 		p.Department, p.Category, p.Subcategory,
-		string(tags), nullableString(p.BaseSKU), p.Active, id,
+		string(tags), nullableString(p.BaseSKU), p.PrimaryImageURL, p.Active, id,
 	)
 	if err != nil {
 		return nil, mapCatalogPgError(err, "update product")
@@ -222,7 +222,7 @@ func listProducts(ctx context.Context, q querier) ([]domain.Product, error) {
 		SELECT id, product_code, external_product_id, title, slug,
 		       short_description, description, additional_info,
 		       department, category, subcategory, tags, base_sku,
-		       active, created_at, updated_at, last_synced_at
+		       primary_image_url, active, created_at, updated_at, last_synced_at
 		FROM catalog_products ORDER BY id`
 
 	rows, err := q.QueryContext(ctx, query)
@@ -435,7 +435,7 @@ func (r *PostgresCatalogRepository) ListProductProjectionPage(ctx context.Contex
 		SELECT id, product_code, external_product_id, title, slug,
 		       short_description, description, additional_info,
 		       department, category, subcategory, tags, base_sku,
-		       active, created_at, updated_at, last_synced_at
+		       primary_image_url, active, created_at, updated_at, last_synced_at
 		FROM catalog_products%s
 		ORDER BY updated_at ASC, id ASC LIMIT $%d`, where, n)
 
@@ -659,7 +659,7 @@ func scanCatalogProduct(s catalogScanner) (*domain.Product, error) {
 		&p.ID, &p.ProductCode, &externalID, &p.Title, &p.Slug,
 		&p.ShortDescription, &p.Description, &p.AdditionalInfo,
 		&p.Department, &p.Category, &p.Subcategory, &tagsJSON, &baseSKU,
-		&p.Active, &p.CreatedAt, &p.UpdatedAt, &lastSynced,
+		&p.PrimaryImageURL, &p.Active, &p.CreatedAt, &p.UpdatedAt, &lastSynced,
 	)
 	if err != nil {
 		return nil, err

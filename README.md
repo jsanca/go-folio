@@ -1,59 +1,56 @@
 # go-folio
 
-go-folio is a production-ready product catalog service written in Go, designed to manage and serve structured product and category data for a leather goods store.
+go-folio is a portfolio e-commerce backend for a leather goods store. It demonstrates a multi-service Go architecture with a React admin SPA and a Next.js customer storefront — all wired together through a single API gateway.
 
-Built with a focus on clean architecture, it separates concerns across distinct layers — configuration, persistence, business logic, and transport — keeping each boundary explicit and testable. The service exposes a REST API, connects to a relational database, and includes structured logging and observability from the start.
-
-Designed as a portfolio project, go-folio demonstrates idiomatic Go patterns: dependency injection without frameworks, layered runtime composition, database-backed seeding, and a minimal but production-conscious main.
-
-## High-level architecture
+## Architecture
 
 ```
-React SPA (client/)
-    │
-    ▼ REST/JSON
-API Gateway :8090  ──── Keycloak :8180  (JWT validation)
-    ├──→ catalog-service  :8080  (REST)
-    └──→ inventory-service :9090  (gRPC)
+                    ┌─────────────────┐   ┌─────────────────┐
+                    │  store (Next.js) │   │  admin (Vite)   │
+                    │   :3000          │   │   :3001          │
+                    └────────┬────────┘   └────────┬────────┘
+                             │ REST/JSON            │ REST/JSON
+                             ▼                      ▼
+                    ┌──────────────────────────────────────────┐
+                    │          gateway-service :8090           │
+                    │  (auth middleware, aggregation, SSE)     │
+                    └────────────┬─────────────┬──────────────┘
+                                 │             │
+                    REST :8080   │             │  gRPC :9090
+                                 ▼             ▼
+                    ┌─────────────────┐ ┌──────────────────┐
+                    │ catalog-service │ │inventory-service │
+                    │ (products,      │ │(stock, reserva-  │
+                    │  variants)      │ │ tions)           │
+                    └────────┬────────┘ └────────┬─────────┘
+                             │                   │
+                             └─────────┬─────────┘
+                                       ▼
+                              ┌─────────────────┐
+                              │   PostgreSQL     │
+                              │ folio_catalog    │
+                              │ folio_inventory  │
+                              └─────────────────┘
+
+                    ┌─────────────────┐   ┌─────────────────┐
+                    │   Keycloak      │   │     MinIO        │
+                    │   :8080         │   │  :9000 / :9001   │
+                    │ (JWT issuance)  │   │ (image storage)  │
+                    └─────────────────┘   └─────────────────┘
 ```
 
-## High-level reverse proxy/gateway
-```
-Internet
-    │
-    ▼
-Nginx / Traefik (reverse proxy, SSL termination)
-    │
-    ▼
-Gateway :8090
-    ├──→ Catalog :8080    (internal Docker network, not open)
-    └──→ Inventory :9090  (internal Docker network, not open)
-```
+## Docker topology
 
-## Authentication workflow
 ```
-React SPA (public client "gateway")
-    │ ask for a token with usuario/password
-    ▼
-Keycloak realm folio
-    │ emits JWT
-    ▼
-React SPA save the token
-    │ Authorization: Bearer <token>
-    ▼
-Gateway validates the JWT
-```
-
-## docker topology
-```
-docker compose up
-    ├── postgres:5432          (priv)
-    ├── keycloak:8080          (priv, realm folio auto-import)
-    ├── catalog-service:8080   (priv)
-    ├── inventory-service:9090 (priv, gRPC)
-    ├── gateway-service:8090   (priv + pub)
-    ├── store:3000             (pub)
-    └── admin:3001             (pub)
+docker compose up --build
+  ├── postgres           (private network)
+  ├── keycloak    :8080  (private network, realm auto-imported)
+  ├── catalog-service    (private network — reachable only via gateway)
+  ├── inventory-service  (private network — reachable only via gateway)
+  ├── minio      :9000 / :9001  (private network + host ports)
+  ├── gateway-service :8090     (public + private)
+  ├── store       :3000         (public)
+  └── admin       :3001         (public)
 ```
 
 ## Quick start
@@ -62,77 +59,87 @@ docker compose up
 docker compose up --build
 ```
 
-Services:
-- Gateway:   http://localhost:8090
-- Catalog:   http://localhost:8080
-- Keycloak:  http://localhost:8180
+The stack is fully self-contained. No manual setup required.
 
-## Keycloak setup
+| Service | URL |
+|---|---|
+| Customer store | http://localhost:3000 |
+| Admin UI | http://localhost:3001 |
+| Gateway API | http://localhost:8090 |
+| Keycloak admin console | http://localhost:8080/admin |
+| MinIO console | http://localhost:9001 |
 
-After `docker compose up`, Keycloak starts at **http://localhost:8180**.
-The admin console is at http://localhost:8180/admin (credentials: `admin` / `admin`).
+## Authentication
 
-### 1. Create the `folio` realm
+Keycloak starts at **http://localhost:8080**. The `folio` realm is automatically imported from `scripts/keycloak/folio-realm.json` — no manual realm or role configuration needed.
 
-1. Log in to the admin console.
-2. Open the realm dropdown (top-left, shows **Keycloak**) → **Create realm**.
-3. Set **Realm name** to `folio` and click **Create**.
+**Test users (created by the realm import):**
 
-### 2. Create realm roles
+| User | Password | Role |
+|---|---|---|
+| `admin@folio.dev` | `admin123` | `admin` |
+| `customer@folio.dev` | `customer123` | `customer` |
 
-Inside the `folio` realm:
+**Public client:** `gateway` (redirect URIs cover localhost:3000, 3001, 8090).
 
-1. Go to **Realm roles** → **Create role**.
-2. Create role `admin`, save.
-3. Repeat for role `customer`.
-
-### 3. Create a client for the SPA / Postman
-
-1. Go to **Clients** → **Create client**.
-2. Set **Client ID** to `folio-public` and click **Next**.
-3. Disable **Client authentication** (public client) and enable **Standard flow**.
-4. Set **Valid redirect URIs** to `http://localhost:5173/*` and `http://localhost:8090/*`.
-5. Save.
-
-### 4. Create a test user
-
-1. Go to **Users** → **Create new user**.
-2. Fill in **Username** (e.g. `alice`) and save.
-3. Go to the **Credentials** tab → **Set password** (disable Temporary).
-4. Go to **Role Mappings** → **Assign role** → filter by realm → assign `admin` or `customer`.
-
-### 5. Get a token (Postman / curl)
+### Get a token
 
 ```bash
 curl -s -X POST \
-  "http://localhost:8180/realms/folio/protocol/openid-connect/token" \
-  -d "client_id=folio-public" \
+  "http://localhost:8080/realms/folio/protocol/openid-connect/token" \
+  -d "client_id=gateway" \
   -d "grant_type=password" \
-  -d "username=alice" \
-  -d "password=<password>" \
-  | jq .access_token
+  -d "username=admin@folio.dev" \
+  -d "password=admin123" \
+  | jq -r .access_token
 ```
 
-Use the token as `Authorization: Bearer <token>` when calling `/admin/*` endpoints.
+Use the token as `Authorization: Bearer <token>` on admin routes.
 
-## Auth environment variables
+### Permissive mode
 
-| Variable | Default | Description |
+When `KEYCLOAK_URL` is unset the gateway runs in **permissive mode** — all requests pass without authentication. Useful for local development outside Docker.
+
+## API routes
+
+| Method | Route | Auth |
 |---|---|---|
-| `KEYCLOAK_URL` | *(empty)* | Keycloak base URL. **Leave unset for permissive dev mode.** |
-| `KEYCLOAK_REALM` | `folio` | Realm name |
+| `GET` | `/products` | Public |
+| `GET` | `/products/{sku}` | Public |
+| `GET` | `/admin/products` | `admin` role |
+| `POST` | `/admin/products` | `admin` role |
+| `PATCH` | `/admin/products/{id}` | `admin` role |
+| `DELETE` | `/admin/products/{id}` | `admin` role |
+| `POST` | `/admin/products/{id}/variants` | `admin` role |
+| `GET` | `/admin/inventory` | `admin` role |
+| `GET` | `/admin/inventory/{sku}` | `admin` role |
+| `PUT` | `/admin/inventory/{sku}` | `admin` role |
+| `GET` | `/admin/events` | `admin` role (SSE stream) |
 
-When `KEYCLOAK_URL` is empty the gateway starts in **permissive mode** — all
-requests pass through without authentication, including admin routes. This lets
-you develop locally without running Keycloak.
+## Tech stack
 
-## Route access control
-
-| Route | Auth required |
+| Layer | Technology |
 |---|---|
-| `GET /products` | Public |
-| `GET /products/{sku}` | Public |
-| `GET /admin/products` | `admin` role |
-| `POST /admin/products` | `admin` role |
-| `PATCH /admin/products/{sku}` | `admin` role |
-| `PUT /admin/inventory/{sku}` | `admin` role |
+| Backend services | Go 1.23, chi router, pgx/v5 |
+| Inter-service RPC | gRPC (inventory), REST/JSON (catalog) |
+| Database | PostgreSQL 16 |
+| Auth | Keycloak 24, OIDC / RS256 JWT |
+| Image storage | MinIO (S3-compatible) |
+| Customer storefront | Next.js 14 (App Router), Tailwind CSS |
+| Admin UI | Vite + React 18, Ant Design |
+| Observability | slog structured logging, Prometheus metrics |
+| Containerisation | Docker Compose |
+
+## Seed script
+
+`scripts/seed-catalog` is a standalone Go CLI (outside the workspace) that seeds products from a Silver export directory:
+
+```bash
+cd scripts/seed-catalog
+GOWORK=off go run . \
+  --silver-dir ./silver \
+  --images-dir ./images \
+  --dry-run
+```
+
+Full flags: `--gateway`, `--keycloak`, `--realm`, `--user`, `--password`, `--minio-url`, `--minio-user`, `--minio-pass`, `--dry-run`.

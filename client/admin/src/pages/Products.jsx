@@ -156,6 +156,23 @@ export default function Products() {
 
   const columns = [
     {
+      title: '',
+      key: 'thumbnail',
+      width: 56,
+      render: (_, record) => {
+        const color = record.variants?.[0]?.primaryColorHex ?? '#e5e5e5'
+        return (
+          <div style={{
+            width: 40,
+            height: 40,
+            borderRadius: 4,
+            backgroundColor: color,
+            border: '1px solid #eee',
+          }} />
+        )
+      },
+    },
+    {
       title: 'Code',
       dataIndex: 'productCode',
       key: 'productCode',
@@ -175,8 +192,7 @@ export default function Products() {
       title: 'Active',
       key: 'active',
       render: (_, record) => {
-        const vs = record.variants ?? []
-        const active = vs.length > 0 && vs.every((v) => v.active)
+        const active = record.active
         return (
           <Tag icon={active ? <CheckCircleOutlined /> : <StopOutlined />} color={active ? 'green' : 'default'}>
             {active ? 'Active' : 'Inactive'}
@@ -216,9 +232,18 @@ export default function Products() {
           marginBottom: 16,
         }}
       >
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          Products
-        </Typography.Title>
+        <div>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            Products
+          </Typography.Title>
+          {data && (
+            <Space style={{ marginTop: 4 }}>
+              <Tag>{data.length} total</Tag>
+              <Tag color="green">{data.filter((p) => p.active).length} active</Tag>
+              <Tag color="default">{data.filter((p) => !p.active).length} inactive</Tag>
+            </Space>
+          )}
+        </div>
         <Button type="primary" onClick={openCreate}>
           Create Product
         </Button>

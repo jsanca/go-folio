@@ -16,9 +16,10 @@ const fixtureProducts = [
     productCode: 'BAG-001',
     title: 'Leather Tote Bag',
     slug: 'leather-tote-bag',
+    active: true,
     variants: [
-      { sku: 'BAG-001-BRN-M', active: true },
-      { sku: 'BAG-001-BLK-M', active: true },
+      { sku: 'BAG-001-BRN-M', active: true, primaryColorHex: '#8B4513' },
+      { sku: 'BAG-001-BLK-M', active: true, primaryColorHex: '#000000' },
     ],
   },
   {
@@ -26,7 +27,8 @@ const fixtureProducts = [
     productCode: 'BELT-001',
     title: 'Classic Belt',
     slug: 'classic-belt',
-    variants: [{ sku: 'BELT-001-BRN-M', active: false }],
+    active: false,
+    variants: [{ sku: 'BELT-001-BRN-M', active: false, primaryColorHex: '#5C4033' }],
   },
 ]
 
@@ -53,7 +55,7 @@ describe('Products', () => {
     expect(screen.getByText('BELT-001')).toBeInTheDocument()
     expect(screen.getByText('Classic Belt')).toBeInTheDocument()
 
-    // BAG-001: all variants active → Active; BELT-001: one inactive → Inactive
+    // BAG-001: active:true → Active; BELT-001: active:false → Inactive
     // Scope to tbody to avoid matching the "Active" column header <th>.
     const tbody = document.querySelector('.ant-table-tbody')
     expect(within(tbody).getAllByText('Active')).toHaveLength(1)
@@ -96,6 +98,34 @@ describe('Products', () => {
 
     const [, options] = fetchMock.mock.calls[0]
     expect(options.headers.Authorization).toBe('Bearer test-token')
+  })
+
+  it('shows product count summary after data loads', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => fixtureProducts,
+    }))
+
+    render(<Products />, { wrapper })
+
+    await screen.findByText('BAG-001')
+
+    expect(screen.getByText('2 total')).toBeInTheDocument()
+    expect(screen.getByText('1 active')).toBeInTheDocument()
+    expect(screen.getByText('1 inactive')).toBeInTheDocument()
+  })
+
+  it('does not show product count summary while loading', async () => {
+    let resolve
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise((r) => { resolve = r })))
+
+    render(<Products />, { wrapper })
+
+    await waitFor(() => expect(document.querySelector('.ant-spin')).toBeInTheDocument())
+
+    expect(screen.queryByText(/total/)).not.toBeInTheDocument()
+
+    resolve({ ok: true, json: async () => [] })
   })
 
   it('renders Edit and Delete buttons for each row', async () => {
@@ -284,6 +314,64 @@ describe('Products mutations', () => {
       ).length
       expect(getCount).toBeGreaterThan(initialGetCount)
     })
+  })
+})
+
+describe('Products thumbnail column', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('renders a colored swatch using the first variant primaryColorHex', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => fixtureProducts,
+    }))
+
+    render(<Products />, { wrapper })
+    await screen.findByText('BAG-001')
+
+    const swatches = document.querySelectorAll('td div[style*="background-color"]')
+    expect(swatches.length).toBeGreaterThanOrEqual(1)
+
+    const firstSwatch = swatches[0]
+    expect(firstSwatch.style.backgroundColor).toBe('rgb(139, 69, 19)') // #8B4513
+  })
+
+  it('renders a gray placeholder when a product has no variants', async () => {
+    const noVariants = {
+      id: 99,
+      productCode: 'EMPTY-001',
+      title: 'No Variants',
+      slug: 'no-variants',
+      active: true,
+      variants: [],
+    }
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [noVariants],
+    }))
+
+    render(<Products />, { wrapper })
+    await screen.findByText('EMPTY-001')
+
+    const swatch = document.querySelector('td div[style*="background-color"]')
+    expect(swatch).toBeInTheDocument()
+    expect(swatch.style.backgroundColor).toBe('rgb(229, 229, 229)') // #e5e5e5
+  })
+
+  it('thumbnail column has no header text', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => fixtureProducts,
+    }))
+
+    render(<Products />, { wrapper })
+    await screen.findByText('BAG-001')
+
+    const headers = document.querySelectorAll('th.ant-table-cell')
+    expect(headers[0].textContent).toBe('')
   })
 })
 

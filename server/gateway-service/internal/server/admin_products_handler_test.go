@@ -345,10 +345,11 @@ func TestAdminProductsHandler_ListProducts(t *testing.T) {
 	}
 
 	var products []struct {
-		ID          int64  `json:"id"`
-		ProductCode string `json:"productCode"`
-		Title       string `json:"title"`
-		Variants    []struct {
+		ID              int64  `json:"id"`
+		ProductCode     string `json:"productCode"`
+		Title           string `json:"title"`
+		PrimaryImageURL string `json:"primaryImageUrl"`
+		Variants        []struct {
 			SKU   string `json:"sku"`
 			Stock struct {
 				Available int32  `json:"available"`
@@ -369,6 +370,9 @@ func TestAdminProductsHandler_ListProducts(t *testing.T) {
 	}
 	if p.Title != "Leather Tote Bag" {
 		t.Errorf("title: want %q, got %q", "Leather Tote Bag", p.Title)
+	}
+	if p.PrimaryImageURL != "" {
+		t.Errorf("primaryImageUrl: want empty string when not set, got %q", p.PrimaryImageURL)
 	}
 	if len(p.Variants) != 1 {
 		t.Fatalf("want 1 variant, got %d", len(p.Variants))
@@ -408,6 +412,7 @@ func TestAdminProducts_FullFields(t *testing.T) {
 			ShortDescription: "A slim leather wallet",
 			Department:       "Wallets",
 			Category:         "Slim",
+			PrimaryImageURL:  "products/slim-wallet/front.jpg",
 			Active:           true,
 		},
 		Variants: []clients.CatalogVariant{
@@ -441,6 +446,7 @@ func TestAdminProducts_FullFields(t *testing.T) {
 		ShortDescription string `json:"shortDescription"`
 		Department       string `json:"department"`
 		Category         string `json:"category"`
+		PrimaryImageURL  string `json:"primaryImageUrl"`
 		Active           bool   `json:"active"`
 		Variants         []struct {
 			SKU   string `json:"sku"`
@@ -465,6 +471,9 @@ func TestAdminProducts_FullFields(t *testing.T) {
 	}
 	if p.Category != "Slim" {
 		t.Errorf("category: want %q, got %q", "Slim", p.Category)
+	}
+	if p.PrimaryImageURL != "products/slim-wallet/front.jpg" {
+		t.Errorf("primaryImageUrl: want %q, got %q", "products/slim-wallet/front.jpg", p.PrimaryImageURL)
 	}
 	if !p.Active {
 		t.Errorf("active: want true, got false")

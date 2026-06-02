@@ -121,6 +121,9 @@ func (s *defaultCatalogService) UpdateProduct(ctx context.Context, id int64, upd
 		if update.Category != nil {
 			existing.Category = *update.Category
 		}
+		if update.PrimaryImageURL != nil {
+			existing.PrimaryImageURL = *update.PrimaryImageURL
+		}
 		if update.Active != nil {
 			existing.Active = *update.Active
 		}

@@ -14,6 +14,7 @@ type ProductUpdate struct {
 	ShortDescription *string
 	Department       *string
 	Category         *string
+	PrimaryImageURL  *string
 	Active           *bool
 }
 

@@ -22,6 +22,7 @@ type Product struct {
 	Subcategory       string     `json:"subcategory,omitempty"`
 	Tags              []string   `json:"tags,omitempty"`
 	BaseSKU           string     `json:"baseSku,omitempty"`
+	PrimaryImageURL   string     `json:"primaryImageUrl,omitempty"`
 	Active            bool       `json:"active"`
 	CreatedAt         time.Time  `json:"createdAt"`
 	UpdatedAt         time.Time  `json:"updatedAt"`

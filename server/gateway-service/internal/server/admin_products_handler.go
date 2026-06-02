@@ -23,6 +23,7 @@ type adminProductResponse struct {
 	ShortDescription string            `json:"shortDescription"`
 	Department       string            `json:"department"`
 	Category         string            `json:"category"`
+	PrimaryImageURL  string            `json:"primaryImageUrl"`
 	Active           bool              `json:"active"`
 	Variants         []variantResponse `json:"variants"`
 }
@@ -78,6 +79,7 @@ func (h *AdminProductsHandler) listProducts(w http.ResponseWriter, r *http.Reque
 			ShortDescription: proj.Product.ShortDescription,
 			Department:       proj.Product.Department,
 			Category:         proj.Product.Category,
+			PrimaryImageURL:  proj.Product.PrimaryImageURL,
 			Active:           proj.Product.Active,
 			Variants:         variants,
 		})

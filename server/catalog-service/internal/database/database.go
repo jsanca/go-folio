@@ -25,7 +25,11 @@ func Connect(cfg config.Config) (*sql.DB, error) {
 	}
 	if _, err := db.Exec(migrations.SQL002); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("apply migration: %w", err)
+		return nil, fmt.Errorf("apply migration 002: %w", err)
+	}
+	if _, err := db.Exec(migrations.SQL003); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("apply migration 003: %w", err)
 	}
 	return db, nil
 }
