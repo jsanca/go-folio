@@ -123,6 +123,32 @@ func (c *CatalogClient) GetVariantBySKU(ctx context.Context, sku string) (*Catal
 	return &result, nil
 }
 
+// GetProductBySlug fetches the full product projection (product + all variants) for a slug.
+// Returns ErrNotFound if catalog-service responds with 404.
+func (c *CatalogClient) GetProductBySlug(ctx context.Context, slug string) (*CatalogProjection, error) {
+	u := c.baseURL + "/products/slug/" + url.PathEscape(slug)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build get product by slug request: %w", err)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("get product by slug: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ErrNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get product by slug: unexpected status %d", resp.StatusCode)
+	}
+	var result CatalogProjection
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode get product by slug response: %w", err)
+	}
+	return &result, nil
+}
+
 // ProxyRequest forwards a mutating request to the catalog-service and returns
 // the upstream status code and raw response body.
 func (c *CatalogClient) ProxyRequest(ctx context.Context, method, path string, body io.Reader) (int, []byte, error) {

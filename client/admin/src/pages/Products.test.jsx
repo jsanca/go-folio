@@ -320,31 +320,58 @@ describe('Products mutations', () => {
 describe('Products thumbnail column', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    // Reset VITE_MINIO_URL between tests
+    delete import.meta.env.VITE_MINIO_URL
   })
 
-  it('renders a colored swatch using the first variant primaryColorHex', async () => {
+  it('renders <img> with correct src when primaryImageUrl and VITE_MINIO_URL are set', async () => {
+    import.meta.env.VITE_MINIO_URL = 'http://localhost:9000/folio'
+
+    const withImage = [{
+      ...fixtureProducts[0],
+      primaryImageUrl: 'products/leather-tote-bag/front.jpg',
+    }]
+
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => fixtureProducts,
+      json: async () => withImage,
     }))
 
     render(<Products />, { wrapper })
     await screen.findByText('BAG-001')
 
-    const swatches = document.querySelectorAll('td div[style*="background-color"]')
-    expect(swatches.length).toBeGreaterThanOrEqual(1)
-
-    const firstSwatch = swatches[0]
-    expect(firstSwatch.style.backgroundColor).toBe('rgb(139, 69, 19)') // #8B4513
+    const img = document.querySelector('td img')
+    expect(img).toBeInTheDocument()
+    expect(img.src).toBe('http://localhost:9000/folio/products/leather-tote-bag/front.jpg')
   })
 
-  it('renders a gray placeholder when a product has no variants', async () => {
+  it('renders color swatch fallback when primaryImageUrl is empty', async () => {
+    import.meta.env.VITE_MINIO_URL = 'http://localhost:9000/folio'
+
+    const noImage = [{ ...fixtureProducts[0], primaryImageUrl: '' }]
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => noImage,
+    }))
+
+    render(<Products />, { wrapper })
+    await screen.findByText('BAG-001')
+
+    expect(document.querySelector('td img')).not.toBeInTheDocument()
+    const swatch = document.querySelector('td div[style*="background-color"]')
+    expect(swatch).toBeInTheDocument()
+    expect(swatch.style.backgroundColor).toBe('rgb(139, 69, 19)') // #8B4513
+  })
+
+  it('renders gray placeholder when no variants and no image', async () => {
     const noVariants = {
       id: 99,
       productCode: 'EMPTY-001',
       title: 'No Variants',
       slug: 'no-variants',
       active: true,
+      primaryImageUrl: '',
       variants: [],
     }
 

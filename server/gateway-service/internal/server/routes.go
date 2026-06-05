@@ -10,11 +10,12 @@ import (
 func registerRoutes(r chi.Router, rt *runtime.GatewayRuntime, logger *slog.Logger) {
 	// ── Public routes ─────────────────────────────────────────────────────────
 	NewProductsHandler(rt, logger).RegisterRoutes(r)
+	sseH := NewSSEHandler(rt, logger)
+	r.Get("/events", sseH.streamEvents)
 
 	// ── Admin routes — require a valid JWT with the "admin" realm role ────────
 	adminH := NewAdminProductsHandler(rt, logger)
 	adminInvH := NewAdminInventoryHandler(rt, logger)
-	sseH := NewSSEHandler(rt, logger)
 	r.Group(func(r chi.Router) {
 		r.Use(rt.Auth.RequireAuth)
 		r.Use(rt.Auth.RequireRole("admin"))

@@ -91,6 +91,10 @@ func (s *defaultCatalogService) GetProductByID(ctx context.Context, id int64) (*
 	return s.products.GetProductByID(ctx, id)
 }
 
+func (s *defaultCatalogService) GetProductBySlug(ctx context.Context, slug string) (*domain.Product, error) {
+	return s.products.GetProductBySlug(ctx, slug)
+}
+
 func (s *defaultCatalogService) ListProducts(ctx context.Context) ([]domain.Product, error) {
 	return s.products.ListProducts(ctx)
 }

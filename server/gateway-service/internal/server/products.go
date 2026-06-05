@@ -42,7 +42,10 @@ type productResponse struct {
 	ProductCode     string            `json:"productCode"`
 	Title           string            `json:"title"`
 	Slug            string            `json:"slug"`
+	Department      string            `json:"department"`
+	Category        string            `json:"category"`
 	PrimaryImageURL string            `json:"primaryImageUrl"`
+	Active          bool              `json:"active"`
 	Variants        []variantResponse `json:"variants"`
 }
 
@@ -59,10 +62,10 @@ func NewProductsHandler(rt *runtime.GatewayRuntime, logger *slog.Logger) *Produc
 	return &ProductsHandler{rt: rt, logger: logger}
 }
 
-// RegisterRoutes wires /products and /products/{sku}.
+// RegisterRoutes wires /products and /products/{slug}.
 func (h *ProductsHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/products", h.listProducts)
-	r.Get("/products/{sku}", h.getProductBySKU)
+	r.Get("/products/{slug}", h.getProductBySlug)
 }
 
 // listProducts aggregates all catalog products with live inventory stock.
@@ -95,56 +98,54 @@ func (h *ProductsHandler) listProducts(w http.ResponseWriter, r *http.Request) {
 			ProductCode:     proj.Product.ProductCode,
 			Title:           proj.Product.Title,
 			Slug:            proj.Product.Slug,
+			Department:      proj.Product.Department,
+			Category:        proj.Product.Category,
 			PrimaryImageURL: proj.Product.PrimaryImageURL,
+			Active:          proj.Product.Active,
 			Variants:        variants,
 		})
 	}
 	writeJSON(w, http.StatusOK, result)
 }
 
-// getProductBySKU fetches a single variant by SKU and hydrates it with live inventory stock.
-func (h *ProductsHandler) getProductBySKU(w http.ResponseWriter, r *http.Request) {
-	sku := chi.URLParam(r, "sku")
-	proj, err := h.rt.Catalog.GetVariantBySKU(r.Context(), sku)
+// getProductBySlug fetches a full product projection by slug and hydrates each variant with live stock.
+func (h *ProductsHandler) getProductBySlug(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	proj, err := h.rt.Catalog.GetProductBySlug(r.Context(), slug)
 	if err != nil {
 		if errors.Is(err, clients.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "NOT_FOUND", "variant not found")
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "product not found")
 			return
 		}
-		h.logger.Error("get variant from catalog", "sku", sku, "err", err)
-		writeError(w, http.StatusBadGateway, "UPSTREAM_ERROR", "failed to fetch variant")
+		h.logger.Error("get product by slug from catalog", "slug", slug, "err", err)
+		writeError(w, http.StatusBadGateway, "UPSTREAM_ERROR", "failed to fetch product")
 		return
 	}
-	if len(proj.Variants) == 0 {
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "variant not found")
-		return
-	}
-	v := proj.Variants[0]
-	stock := h.fetchStock(r.Context(), v.SKU)
 
-	type singleResponse struct {
-		ID          int64     `json:"id"`
-		ProductCode string    `json:"productCode"`
-		Title       string    `json:"title"`
-		Slug        string    `json:"slug"`
-		SKU         string    `json:"sku"`
-		ColorName   string    `json:"colorName,omitempty"`
-		ColorSlug   string    `json:"colorSlug,omitempty"`
-		RetailPrice money     `json:"retailPrice"`
-		Currency    string    `json:"currency"`
-		Stock       stockInfo `json:"stock"`
+	variants := make([]variantResponse, 0, len(proj.Variants))
+	for _, v := range proj.Variants {
+		stock := h.fetchStock(r.Context(), v.SKU)
+		variants = append(variants, variantResponse{
+			SKU:             v.SKU,
+			ColorName:       v.ColorName,
+			ColorSlug:       v.ColorSlug,
+			PrimaryColorHex: v.PrimaryColorHex,
+			RetailPrice:     money{AmountCents: v.RetailPrice.AmountCents},
+			Currency:        v.Currency,
+			Stock:           stock,
+			Active:          v.Active,
+		})
 	}
-	writeJSON(w, http.StatusOK, singleResponse{
-		ID:          proj.Product.ID,
-		ProductCode: proj.Product.ProductCode,
-		Title:       proj.Product.Title,
-		Slug:        proj.Product.Slug,
-		SKU:         v.SKU,
-		ColorName:   v.ColorName,
-		ColorSlug:   v.ColorSlug,
-		RetailPrice: money{AmountCents: v.RetailPrice.AmountCents},
-		Currency:    v.Currency,
-		Stock:       stock,
+	writeJSON(w, http.StatusOK, productResponse{
+		ID:              proj.Product.ID,
+		ProductCode:     proj.Product.ProductCode,
+		Title:           proj.Product.Title,
+		Slug:            proj.Product.Slug,
+		Department:      proj.Product.Department,
+		Category:        proj.Product.Category,
+		PrimaryImageURL: proj.Product.PrimaryImageURL,
+		Active:          proj.Product.Active,
+		Variants:        variants,
 	})
 }
 

@@ -34,6 +34,7 @@ func (h *CatalogHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/catalog/product-projections", h.listProductProjections)
 	r.Get("/catalog/variant-inventory", h.listVariantInventory)
 	r.Get("/catalog/variants/{sku}", h.getVariantBySKU)
+	r.Get("/products/slug/{slug}", h.getProductBySlug)
 }
 
 func (h *CatalogHandler) listProducts(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +66,40 @@ func (h *CatalogHandler) getVariantBySKU(w http.ResponseWriter, r *http.Request)
 		Product:  *product,
 		Variants: []domain.ProductVariant{*v},
 		Images:   []domain.ProductImage{},
+	})
+}
+
+func (h *CatalogHandler) getProductBySlug(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	product, err := h.svc.GetProductBySlug(r.Context(), slug)
+	if errors.Is(err, repository.ErrProductNotFound) {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "product not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "internal server error")
+		return
+	}
+	variants, err := h.svc.ListVariantsByProductID(r.Context(), product.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "internal server error")
+		return
+	}
+	images, err := h.svc.ListProductImagesByProductID(r.Context(), product.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "internal server error")
+		return
+	}
+	if variants == nil {
+		variants = []domain.ProductVariant{}
+	}
+	if images == nil {
+		images = []domain.ProductImage{}
+	}
+	writeJSON(w, http.StatusOK, domain.ProductProjection{
+		Product:  *product,
+		Variants: variants,
+		Images:   images,
 	})
 }
 
@@ -135,6 +170,7 @@ type updateProductRequest struct {
 	ShortDescription *string `json:"shortDescription"`
 	Department       *string `json:"department"`
 	Category         *string `json:"category"`
+	PrimaryImageURL  *string `json:"primaryImageUrl"`
 	Active           *bool   `json:"active"`
 }
 
@@ -178,6 +214,7 @@ func (h *CatalogHandler) updateProduct(w http.ResponseWriter, r *http.Request) {
 		ShortDescription: req.ShortDescription,
 		Department:       req.Department,
 		Category:         req.Category,
+		PrimaryImageURL:  req.PrimaryImageURL,
 		Active:           req.Active,
 	}
 	updated, err := h.svc.UpdateProduct(r.Context(), id, update)

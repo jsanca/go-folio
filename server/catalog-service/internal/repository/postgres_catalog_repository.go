@@ -51,6 +51,11 @@ func (r *PostgresCatalogRepository) GetProductByIDForUpdate(ctx context.Context,
 	return getProductByIDForUpdate(ctx, r.db, id)
 }
 
+// GetProductBySlug returns the product with the given slug.
+func (r *PostgresCatalogRepository) GetProductBySlug(ctx context.Context, slug string) (*domain.Product, error) {
+	return getProductBySlug(ctx, r.db, slug)
+}
+
 // UpdateProduct updates all mutable fields of the product identified by id and returns the persisted record.
 func (r *PostgresCatalogRepository) UpdateProduct(ctx context.Context, id int64, p *domain.Product) (*domain.Product, error) {
 	return updateProduct(ctx, r.db, id, p)
@@ -91,6 +96,11 @@ func (r *pgTxCatalogRepository) GetProductByID(ctx context.Context, id int64) (*
 // GetProductByIDForUpdate returns the product with the given id and acquires a row lock within the transaction.
 func (r *pgTxCatalogRepository) GetProductByIDForUpdate(ctx context.Context, id int64) (*domain.Product, error) {
 	return getProductByIDForUpdate(ctx, r.tx, id)
+}
+
+// GetProductBySlug returns the product with the given slug within the transaction.
+func (r *pgTxCatalogRepository) GetProductBySlug(ctx context.Context, slug string) (*domain.Product, error) {
+	return getProductBySlug(ctx, r.tx, slug)
 }
 
 // UpdateProduct updates all mutable fields of the product identified by id within the transaction.
@@ -167,6 +177,22 @@ func getProductByIDForUpdate(ctx context.Context, q querier, id int64) (*domain.
 		FROM catalog_products WHERE id = $1 FOR UPDATE`
 
 	row := q.QueryRowContext(ctx, query, id)
+	p, err := scanCatalogProduct(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrProductNotFound
+	}
+	return p, err
+}
+
+func getProductBySlug(ctx context.Context, q querier, slug string) (*domain.Product, error) {
+	const query = `
+		SELECT id, product_code, external_product_id, title, slug,
+		       short_description, description, additional_info,
+		       department, category, subcategory, tags, base_sku,
+		       primary_image_url, active, created_at, updated_at, last_synced_at
+		FROM catalog_products WHERE slug = $1`
+
+	row := q.QueryRowContext(ctx, query, slug)
 	p, err := scanCatalogProduct(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrProductNotFound

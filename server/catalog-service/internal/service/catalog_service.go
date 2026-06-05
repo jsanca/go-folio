@@ -23,6 +23,7 @@ type CatalogService interface {
 	// Product operations
 	CreateProduct(ctx context.Context, p *domain.Product) (*domain.Product, error)
 	GetProductByID(ctx context.Context, id int64) (*domain.Product, error)
+	GetProductBySlug(ctx context.Context, slug string) (*domain.Product, error)
 	ListProducts(ctx context.Context) ([]domain.Product, error)
 	UpdateProduct(ctx context.Context, id int64, update ProductUpdate) (*domain.Product, error)
 	DeleteProduct(ctx context.Context, id int64) error

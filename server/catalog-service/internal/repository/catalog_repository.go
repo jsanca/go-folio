@@ -16,6 +16,7 @@ type CatalogProductRepository interface {
 	// GetProductByIDForUpdate fetches a product and acquires a row lock (SELECT … FOR UPDATE).
 	// It must be called inside a transaction to have effect.
 	GetProductByIDForUpdate(ctx context.Context, id int64) (*domain.Product, error)
+	GetProductBySlug(ctx context.Context, slug string) (*domain.Product, error)
 	ListProducts(ctx context.Context) ([]domain.Product, error)
 	UpdateProduct(ctx context.Context, id int64, p *domain.Product) (*domain.Product, error)
 	DeleteProduct(ctx context.Context, id int64) error

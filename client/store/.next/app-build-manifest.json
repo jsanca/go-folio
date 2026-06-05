@@ -1,5 +1,10 @@
 {
   "pages": {
+    "/products/[slug]/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/products/[slug]/page.js"
+    ],
     "/layout": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
@@ -11,10 +16,10 @@
       "static/chunks/main-app.js",
       "static/chunks/app/page.js"
     ],
-    "/_not-found/page": [
+    "/products/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/_not-found/page.js"
+      "static/chunks/app/products/page.js"
     ]
   }
 }

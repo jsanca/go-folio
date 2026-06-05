@@ -160,15 +160,37 @@ export default function Products() {
       key: 'thumbnail',
       width: 56,
       render: (_, record) => {
-        const color = record.variants?.[0]?.primaryColorHex ?? '#e5e5e5'
+        const minioBase = import.meta.env.VITE_MINIO_URL
+        const src = minioBase && record.primaryImageUrl
+          ? `${minioBase}/${record.primaryImageUrl}`
+          : null
+        const fallbackColor = record.variants?.[0]?.primaryColorHex ?? '#e5e5e5'
+        const style = {
+          width: 48,
+          height: 48,
+          borderRadius: 6,
+          border: '1px solid #eee',
+          objectFit: 'cover',
+          display: 'block',
+        }
+        if (src) {
+          return (
+            <>
+              <img
+                src={src}
+                alt={record.title}
+                style={style}
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none'
+                  e.currentTarget.nextSibling.style.display = 'block'
+                }}
+              />
+              <div style={{ ...style, backgroundColor: fallbackColor, display: 'none' }} />
+            </>
+          )
+        }
         return (
-          <div style={{
-            width: 40,
-            height: 40,
-            borderRadius: 4,
-            backgroundColor: color,
-            border: '1px solid #eee',
-          }} />
+          <div style={{ ...style, backgroundColor: fallbackColor }} />
         )
       },
     },

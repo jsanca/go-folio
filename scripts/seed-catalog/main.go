@@ -150,23 +150,24 @@ func (c *client) ensureToken() error {
 	return nil
 }
 
-func (c *client) doJSON(method, path string, body any, out any) (int, error) {
+// doJSON executes a JSON request and returns the HTTP status, raw response body, and any error.
+func (c *client) doJSON(method, path string, body any, out any) (int, []byte, error) {
 	if err := c.ensureToken(); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		bodyReader = bytes.NewReader(data)
 	}
 
 	req, err := http.NewRequest(method, c.gateway+path, bodyReader)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.accessToken)
 	if body != nil {
@@ -175,7 +176,7 @@ func (c *client) doJSON(method, path string, body any, out any) (int, error) {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 
@@ -187,15 +188,15 @@ func (c *client) doJSON(method, path string, body any, out any) (int, error) {
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return resp.StatusCode, err
+		return resp.StatusCode, nil, err
 	}
 
 	if out != nil && len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, out); err != nil {
-			return resp.StatusCode, fmt.Errorf("decode response (%d): %w — body: %s", resp.StatusCode, err, respBody)
+			return resp.StatusCode, respBody, fmt.Errorf("decode response (%d): %w — body: %s", resp.StatusCode, err, respBody)
 		}
 	}
-	return resp.StatusCode, nil
+	return resp.StatusCode, respBody, nil
 }
 
 // ── MinIO helpers ─────────────────────────────────────────────────────────────
@@ -325,7 +326,7 @@ func main() {
 
 		// Create product.
 		var created createdProduct
-		status, err := cli.doJSON(http.MethodPost, "/admin/products",
+		status, _, err := cli.doJSON(http.MethodPost, "/admin/products",
 			createProductPayload{
 				ProductCode:      productCode,
 				Title:            sp.Title,
@@ -356,7 +357,7 @@ func main() {
 		for _, v := range sp.Variants {
 			price := v.RetailPrice
 			vlog := log.With("sku", v.SKU)
-			vstatus, err := cli.doJSON(http.MethodPost,
+			vstatus, _, err := cli.doJSON(http.MethodPost,
 				fmt.Sprintf("/admin/products/%d/variants", created.ID),
 				createVariantPayload{
 					SKU:             v.SKU,
@@ -401,14 +402,14 @@ func main() {
 
 		// Save the relative path of the first image as the product's primary image.
 		if firstImage != "" {
-			pstatus, err := cli.doJSON(http.MethodPatch,
+			pstatus, pbody, err := cli.doJSON(http.MethodPatch,
 				fmt.Sprintf("/admin/products/%d", created.ID),
 				map[string]string{"primaryImageUrl": firstImage},
 				nil)
 			if err != nil || pstatus != http.StatusOK {
-				log.Error("set primaryImageUrl", "status", pstatus, "err", err)
+				log.Error("set primaryImageUrl failed", "status", pstatus, "body", string(pbody), "err", err)
 			} else {
-				log.Info("primaryImageUrl saved", "path", firstImage)
+				log.Info("primaryImageUrl saved", "status", pstatus, "path", firstImage)
 			}
 		}
 

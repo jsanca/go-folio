@@ -63,6 +63,23 @@ services:
         aliases:
           - minio
 
+  createbuckets:
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set local http://minio:9000 folio folio1234;
+      mc mb --ignore-existing local/folio;
+      mc anonymous set public local/folio;
+      exit 0;
+      "
+    networks:
+      private:
+        aliases:
+          - createbuckets
+
   gateway-service:
     build:
       context: .
@@ -103,6 +120,8 @@ services:
       - store-node-modules:/app/node_modules
     environment:
       - NEXT_PUBLIC_GATEWAY_URL=http://localhost:8090
+      - GATEWAY_URL=http://gateway-service:8090
+      - NEXT_PUBLIC_MINIO_URL=http://localhost:9000/folio
       - WATCHPACK_POLLING=true
     depends_on:
       gateway-service:
@@ -126,6 +145,7 @@ services:
       - CHOKIDAR_USEPOLLING=true
       - VITE_GATEWAY_URL=http://localhost:8090
       - VITE_KEYCLOAK_URL=http://keycloak:8080 # server-side
+      - VITE_MINIO_URL=http://localhost:9000/folio
     depends_on:
       gateway-service:
         condition: service_started
