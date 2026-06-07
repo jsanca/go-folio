@@ -151,7 +151,12 @@ func (c *client) ensureToken() error {
 }
 
 // doJSON executes a JSON request and returns the HTTP status, raw response body, and any error.
+// On a 401 response it refreshes the token and retries exactly once.
 func (c *client) doJSON(method, path string, body any, out any) (int, []byte, error) {
+	return c.doJSONWithRetry(method, path, body, out, false)
+}
+
+func (c *client) doJSONWithRetry(method, path string, body any, out any, retried bool) (int, []byte, error) {
 	if err := c.ensureToken(); err != nil {
 		return 0, nil, err
 	}
@@ -180,10 +185,12 @@ func (c *client) doJSON(method, path string, body any, out any) (int, []byte, er
 	}
 	defer resp.Body.Close()
 
-	// On 401, refresh token once and retry.
 	if resp.StatusCode == http.StatusUnauthorized {
+		if retried {
+			return 0, nil, fmt.Errorf("authentication failed after token refresh")
+		}
 		c.accessToken = ""
-		return c.doJSON(method, path, body, out)
+		return c.doJSONWithRetry(method, path, body, out, true)
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
