@@ -1,0 +1,187 @@
+.login-shell {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.login-card {
+  overflow: hidden;
+  position: relative;
+  text-align: center;
+  width: min(380px, 100%);
+}
+
+.login-card .ant-card-body {
+  position: relative;
+}
+
+.login-content {
+  position: relative;
+  width: 100%;
+  z-index: 2;
+}
+
+.wallet-intro {
+  bottom: 22px;
+  height: 58px;
+  left: 24px;
+  overflow: hidden;
+  pointer-events: none;
+  position: absolute;
+  right: 24px;
+  z-index: 1;
+}
+
+.wallet-piece {
+  animation: assemble-wallet 1.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.3), transparent 38%),
+    linear-gradient(145deg, #9a6542, #553626);
+  border: 1px solid rgba(77, 45, 29, 0.22);
+  border-radius: 7px;
+  box-shadow:
+    0 10px 22px rgba(63, 42, 29, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  height: 30px;
+  left: 50%;
+  opacity: 0;
+  position: absolute;
+  top: 50%;
+  width: 66px;
+}
+
+.wallet-piece-top-left-a {
+  --from-x: -230px;
+  --from-y: -92px;
+  --from-rot: -20deg;
+  --to-x: -166px;
+  --to-y: -28px;
+  --to-rot: -3deg;
+  animation-delay: 0ms;
+}
+
+.wallet-piece-top-left-b {
+  --from-x: -190px;
+  --from-y: -70px;
+  --from-rot: 14deg;
+  --to-x: -98px;
+  --to-y: -30px;
+  --to-rot: 2deg;
+  animation-delay: 55ms;
+}
+
+.wallet-piece-top-right-a {
+  --from-x: 190px;
+  --from-y: -92px;
+  --from-rot: 18deg;
+  --to-x: 20px;
+  --to-y: -30px;
+  --to-rot: -2deg;
+  animation-delay: 95ms;
+}
+
+.wallet-piece-top-right-b {
+  --from-x: 230px;
+  --from-y: -68px;
+  --from-rot: -12deg;
+  --to-x: 92px;
+  --to-y: -28px;
+  --to-rot: 3deg;
+  animation-delay: 130ms;
+}
+
+.wallet-piece-bottom-left-a {
+  --from-x: -224px;
+  --from-y: 84px;
+  --from-rot: 18deg;
+  --to-x: -166px;
+  --to-y: 2px;
+  --to-rot: 3deg;
+  animation-delay: 85ms;
+}
+
+.wallet-piece-bottom-left-b {
+  --from-x: -184px;
+  --from-y: 70px;
+  --from-rot: -12deg;
+  --to-x: -94px;
+  --to-y: 4px;
+  --to-rot: -2deg;
+  animation-delay: 145ms;
+}
+
+.wallet-piece-bottom-right-a {
+  --from-x: 182px;
+  --from-y: 78px;
+  --from-rot: -18deg;
+  --to-x: 20px;
+  --to-y: 4px;
+  --to-rot: 2deg;
+  animation-delay: 175ms;
+}
+
+.wallet-piece-bottom-right-b {
+  --from-x: 230px;
+  --from-y: 86px;
+  --from-rot: 12deg;
+  --to-x: 92px;
+  --to-y: 2px;
+  --to-rot: -3deg;
+  animation-delay: 210ms;
+}
+
+.wallet-stitch {
+  animation: reveal-stitch 1.4s ease-out 0.38s both;
+  border: 1px dashed rgba(223, 186, 134, 0.45);
+  border-radius: 10px;
+  inset: 6px 0 4px;
+  opacity: 0;
+  position: absolute;
+}
+
+@keyframes assemble-wallet {
+  0% {
+    opacity: 0;
+    transform: translate(var(--from-x), var(--from-y)) rotate(var(--from-rot)) scale(0.78);
+  }
+
+  58% {
+    opacity: 0.2;
+  }
+
+  100% {
+    opacity: 0.12;
+    transform: translate(var(--to-x), var(--to-y)) rotate(var(--to-rot)) scale(1);
+  }
+}
+
+@keyframes reveal-stitch {
+  0%,
+  54% {
+    opacity: 0;
+    transform: scaleX(0.7);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wallet-piece,
+  .wallet-stitch {
+    animation: none;
+  }
+
+  .wallet-piece {
+    opacity: 0.14;
+    transform: translate(var(--to-x), var(--to-y)) rotate(var(--to-rot)) scale(1);
+  }
+
+  .wallet-stitch {
+    opacity: 1;
+  }
+}

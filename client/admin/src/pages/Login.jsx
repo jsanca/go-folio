@@ -1,6 +1,7 @@
 import { Button, Card, Space, Typography, theme } from 'antd'
 import { UserOutlined } from '@ant-design/icons'
 import keycloak from '../lib/keycloak'
+import './Login.css'
 
 const { Title, Text } = Typography
 
@@ -9,16 +10,22 @@ export default function Login() {
 
   return (
     <div
-      style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        minHeight: '100vh',
-        background: token.colorBgLayout,
-      }}
+      className="login-shell"
+      style={{ background: token.colorBgLayout }}
     >
-      <Card style={{ width: 380, textAlign: 'center' }}>
-        <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      <Card className="login-card">
+        <div className="wallet-intro" aria-hidden="true">
+          <span className="wallet-piece wallet-piece-top-left-a" />
+          <span className="wallet-piece wallet-piece-top-left-b" />
+          <span className="wallet-piece wallet-piece-top-right-a" />
+          <span className="wallet-piece wallet-piece-top-right-b" />
+          <span className="wallet-piece wallet-piece-bottom-left-a" />
+          <span className="wallet-piece wallet-piece-bottom-left-b" />
+          <span className="wallet-piece wallet-piece-bottom-right-a" />
+          <span className="wallet-piece wallet-piece-bottom-right-b" />
+          <span className="wallet-stitch" />
+        </div>
+        <Space direction="vertical" size="large" className="login-content">
           <div>
             <Title level={2} style={{ margin: '0 0 4px' }}>
               Folio Admin
