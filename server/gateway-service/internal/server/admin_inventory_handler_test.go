@@ -20,7 +20,6 @@ import (
 	"github.com/jsanca/go-folio/gateway-service/internal/sse"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	grpcstatus "google.golang.org/grpc/status"
 )
 
@@ -73,14 +72,11 @@ func startFakeInventorySrv(t *testing.T, fake *fakeInventoryServer) string {
 // buildRuntimeWithInv wires a GatewayRuntime using a live fake inventory gRPC server.
 func buildRuntimeWithInv(t *testing.T, catalogURL, inventoryAddr, keycloakURL string) *runtime.GatewayRuntime {
 	t.Helper()
-	conn, err := grpc.NewClient(inventoryAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	inv, err := clients.NewInventoryClient(inventoryAddr)
 	if err != nil {
 		t.Fatal("dial fake inventory:", err)
 	}
-	t.Cleanup(func() { conn.Close() })
-	inv := &clients.InventoryClient{
-		Svc: invpb.NewInventoryServiceClient(conn),
-	}
+	t.Cleanup(func() { inv.Close() })
 	auth, err := middleware.NewVerifier(context.Background(), keycloakURL, "folio")
 	if err != nil {
 		t.Fatal("create test verifier:", err)

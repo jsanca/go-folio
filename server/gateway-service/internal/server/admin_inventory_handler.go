@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	invpb "github.com/jsanca/go-folio/gen/inventory"
 	"github.com/jsanca/go-folio/gateway-service/internal/runtime"
 	"github.com/jsanca/go-folio/gateway-service/internal/sse"
 	"google.golang.org/grpc/codes"
@@ -17,21 +16,21 @@ import (
 // inventoryItemResponse is the shape returned by GET /admin/inventory and GET /admin/inventory/{sku}.
 type inventoryItemResponse struct {
 	SKU       string `json:"sku"`
-	Available int32  `json:"available"`
-	Reserved  int32  `json:"reserved"`
+	Available int    `json:"available"`
+	Reserved  int    `json:"reserved"`
 	Status    string `json:"status"`
 }
 
 // adjustStockRequest is the body for PUT /admin/inventory/{sku}.
 type adjustStockRequest struct {
-	Delta  int32  `json:"delta"`
+	Delta  int    `json:"delta"`
 	Reason string `json:"reason"`
 }
 
 // adjustStockResponse is the shape returned by PUT /admin/inventory/{sku}.
 type adjustStockResponse struct {
 	SKU       string `json:"sku"`
-	Available int32  `json:"available"`
+	Available int    `json:"available"`
 	Status    string `json:"status"`
 }
 
@@ -50,16 +49,16 @@ func NewAdminInventoryHandler(rt *runtime.GatewayRuntime, logger *slog.Logger) *
 
 // listStock handles GET /admin/inventory — returns all SKUs with current stock levels.
 func (h *AdminInventoryHandler) listStock(w http.ResponseWriter, r *http.Request) {
-	resp, err := h.rt.Inventory.Svc.ListStock(r.Context(), &invpb.ListStockRequest{})
+	items, err := h.rt.Inventory.ListStock(r.Context())
 	if err != nil {
 		h.logger.Error("list stock from inventory", "err", err)
 		writeError(w, http.StatusBadGateway, "UPSTREAM_ERROR", "failed to fetch stock")
 		return
 	}
-	result := make([]inventoryItemResponse, 0, len(resp.Items))
-	for _, item := range resp.Items {
+	result := make([]inventoryItemResponse, 0, len(items))
+	for _, item := range items {
 		result = append(result, inventoryItemResponse{
-			SKU:       item.Sku,
+			SKU:       item.SKU,
 			Available: item.Available,
 			Reserved:  item.Reserved,
 			Status:    deriveStockStatus(item.Available, h.rt.LowStockThreshold),
@@ -71,7 +70,7 @@ func (h *AdminInventoryHandler) listStock(w http.ResponseWriter, r *http.Request
 // getStock handles GET /admin/inventory/{sku} — returns stock for a single SKU.
 func (h *AdminInventoryHandler) getStock(w http.ResponseWriter, r *http.Request) {
 	sku := chi.URLParam(r, "sku")
-	resp, err := h.rt.Inventory.Svc.GetStock(r.Context(), &invpb.GetStockRequest{Sku: sku})
+	stock, err := h.rt.Inventory.GetStock(r.Context(), sku)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			writeError(w, http.StatusNotFound, "NOT_FOUND", "sku not found")
@@ -82,10 +81,10 @@ func (h *AdminInventoryHandler) getStock(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, inventoryItemResponse{
-		SKU:       resp.Sku,
-		Available: resp.Available,
-		Reserved:  resp.Reserved,
-		Status:    deriveStockStatus(resp.Available, h.rt.LowStockThreshold),
+		SKU:       stock.SKU,
+		Available: stock.Available,
+		Reserved:  stock.Reserved,
+		Status:    deriveStockStatus(stock.Available, h.rt.LowStockThreshold),
 	})
 }
 
@@ -97,11 +96,7 @@ func (h *AdminInventoryHandler) adjustStock(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "INVALID_BODY", "invalid request body")
 		return
 	}
-	resp, err := h.rt.Inventory.Svc.AdjustStock(r.Context(), &invpb.AdjustStockRequest{
-		Sku:    sku,
-		Delta:  req.Delta,
-		Reason: req.Reason,
-	})
+	stock, err := h.rt.Inventory.AdjustStock(r.Context(), sku, req.Delta, req.Reason)
 	if err != nil {
 		switch status.Code(err) {
 		case codes.NotFound:
@@ -118,22 +113,22 @@ func (h *AdminInventoryHandler) adjustStock(w http.ResponseWriter, r *http.Reque
 	// Stock mutations always originate in inventory-service; the gateway's role
 	// is delivery to the browser layer only.
 	h.rt.Events.Publish(sse.StockEvent{
-		EventType:  deriveEventType(resp.Available, int32(h.rt.LowStockThreshold)),
+		EventType:  deriveEventType(stock.Available, h.rt.LowStockThreshold),
 		SKU:        sku,
-		Available:  resp.Available,
+		Available:  int32(stock.Available),
 		Reserved:   0,
-		Status:     deriveStockStatus(resp.Available, h.rt.LowStockThreshold),
+		Status:     deriveStockStatus(stock.Available, h.rt.LowStockThreshold),
 		OccurredAt: time.Now().UTC(),
 	})
 	writeJSON(w, http.StatusOK, adjustStockResponse{
-		SKU:       resp.Sku,
-		Available: resp.Available,
-		Status:    deriveStockStatus(resp.Available, h.rt.LowStockThreshold),
+		SKU:       stock.SKU,
+		Available: stock.Available,
+		Status:    deriveStockStatus(stock.Available, h.rt.LowStockThreshold),
 	})
 }
 
 // deriveEventType maps available stock to a named event type.
-func deriveEventType(available int32, threshold int32) string {
+func deriveEventType(available int, threshold int) string {
 	switch {
 	case available == 0:
 		return "stock.out"

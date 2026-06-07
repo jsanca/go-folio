@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	invpb "github.com/jsanca/go-folio/gen/inventory"
 	"github.com/jsanca/go-folio/gateway-service/internal/clients"
 	"github.com/jsanca/go-folio/gateway-service/internal/runtime"
 	"google.golang.org/grpc/codes"
@@ -17,8 +16,8 @@ import (
 // ── Response types ────────────────────────────────────────────────────────────
 
 type stockInfo struct {
-	Available int32  `json:"available"`
-	Reserved  int32  `json:"reserved"`
+	Available int    `json:"available"`
+	Reserved  int    `json:"reserved"`
 	Status    string `json:"stockStatus"`
 }
 
@@ -152,7 +151,7 @@ func (h *ProductsHandler) getProductBySlug(w http.ResponseWriter, r *http.Reques
 // fetchStock calls inventory-service for the given SKU.
 // Falls back to available=0 / OUT_OF_STOCK on NotFound or any other error.
 func (h *ProductsHandler) fetchStock(ctx context.Context, sku string) stockInfo {
-	resp, err := h.rt.Inventory.Svc.GetStock(ctx, &invpb.GetStockRequest{Sku: sku})
+	stock, err := h.rt.Inventory.GetStock(ctx, sku)
 	if err != nil {
 		if status.Code(err) != codes.NotFound {
 			h.logger.Warn("get stock from inventory", "sku", sku, "err", err)
@@ -160,19 +159,19 @@ func (h *ProductsHandler) fetchStock(ctx context.Context, sku string) stockInfo 
 		return stockInfo{Available: 0, Reserved: 0, Status: "OUT_OF_STOCK"}
 	}
 	return stockInfo{
-		Available: resp.Available,
-		Reserved:  resp.Reserved,
-		Status:    deriveStockStatus(resp.Available, h.rt.LowStockThreshold),
+		Available: stock.Available,
+		Reserved:  stock.Reserved,
+		Status:    deriveStockStatus(stock.Available, h.rt.LowStockThreshold),
 	}
 }
 
 // deriveStockStatus computes status from available quantity and the configured threshold.
 // available == 0 → OUT_OF_STOCK, available <= threshold → LOW_STOCK, else IN_STOCK.
-func deriveStockStatus(available int32, threshold int) string {
+func deriveStockStatus(available int, threshold int) string {
 	switch {
 	case available == 0:
 		return "OUT_OF_STOCK"
-	case int(available) <= threshold:
+	case available <= threshold:
 		return "LOW_STOCK"
 	default:
 		return "IN_STOCK"

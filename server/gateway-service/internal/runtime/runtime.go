@@ -16,7 +16,7 @@ import (
 // GatewayRuntime holds all downstream clients for the gateway domain.
 type GatewayRuntime struct {
 	Catalog           *clients.CatalogClient
-	Inventory         *clients.InventoryClient
+	Inventory         clients.InventoryClient
 	Auth              *middleware.Verifier
 	Events            *sse.Broker
 	LowStockThreshold int
