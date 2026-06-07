@@ -50,8 +50,22 @@ function StockBadge({ status }: { status: Stock['stockStatus'] }) {
   )
 }
 
+function formatStock(stock: Stock): string {
+  if (stock.stockStatus === 'OUT_OF_STOCK' || stock.available === 0) {
+    return 'Sin unidades disponibles'
+  }
+  if (stock.available === 1) {
+    return '1 unidad disponible'
+  }
+  return `${stock.available.toLocaleString('es-CR')} unidades disponibles`
+}
+
 export default function VariantsDisplay({ variants: initialVariants }: Props) {
   const [variants, setVariants] = useState<Variant[]>(initialVariants)
+
+  useEffect(() => {
+    setVariants(initialVariants)
+  }, [initialVariants])
 
   useEffect(() => {
     const skus = new Set(initialVariants.map((v) => v.sku))
@@ -83,7 +97,7 @@ export default function VariantsDisplay({ variants: initialVariants }: Props) {
     }
 
     return () => es.close()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialVariants])
 
   const activeVariants = variants.filter((v) => v.active)
 
@@ -108,7 +122,12 @@ export default function VariantsDisplay({ variants: initialVariants }: Props) {
             Consultar precio
           </p>
         )}
-        <StockBadge status={v.stock.stockStatus} />
+        <div className="mt-2 flex items-center gap-3">
+          <span className="font-sans text-xs tracking-[0.12em] uppercase text-heritage-dark/50">
+            {formatStock(v.stock)}
+          </span>
+          <StockBadge status={v.stock.stockStatus} />
+        </div>
       </div>
     )
   }
@@ -134,8 +153,11 @@ export default function VariantsDisplay({ variants: initialVariants }: Props) {
                 />
               )}
 
-              <span className="font-sans text-sm text-heritage-dark flex-1 leading-none">
-                {v.colorName || v.sku}
+              <span className="font-sans text-sm text-heritage-dark flex-1 leading-tight">
+                <span className="block">{v.colorName || v.sku}</span>
+                <span className="block mt-1 font-sans text-[11px] tracking-[0.12em] uppercase text-heritage-dark/45">
+                  {formatStock(v.stock)}
+                </span>
               </span>
 
               <span className="font-sans text-sm text-heritage-dark text-right">
