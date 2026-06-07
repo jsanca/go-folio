@@ -1,3 +1,20 @@
+// Package service implements the application use cases for the catalog domain.
+//
+// Transaction ownership:
+//   - The service layer owns transaction boundaries (unit of work).
+//   - Repositories own SQL operations but never open or commit transactions.
+//   - A repository method must never call db.BeginTx or tx.Commit.
+//   - The service calls WithTx to bind repository operations to a transaction
+//     it controls.
+//
+// Interface segregation:
+//   - Each repository dependency is expressed as a small, consumer-owned interface.
+//   - The same concrete *PostgresCatalogRepository satisfies multiple interfaces.
+//   - The composition root (runtime package) is the only place that knows all
+//     roles share one concrete object.
+//
+// This separation keeps business consistency rules in the service layer
+// and keeps repositories focused on persistence mechanics.
 package service
 
 import (

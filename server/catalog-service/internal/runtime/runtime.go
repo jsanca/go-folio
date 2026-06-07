@@ -19,7 +19,7 @@ type CatalogRuntime struct {
 // The four-argument NewCatalogService call is intentional: it is the explicit
 // cost of interface segregation at this layer.
 func NewCatalogRuntime(db *sql.DB) *CatalogRuntime {
-	catalogRepo := repository.NewSQLiteCatalogRepository(db)
+	catalogRepo := repository.NewPostgresCatalogRepository(db)
 	return &CatalogRuntime{
 		CatalogSvc: service.NewCatalogService(db, catalogRepo, catalogRepo, catalogRepo, catalogRepo),
 	}

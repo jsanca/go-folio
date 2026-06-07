@@ -33,7 +33,7 @@ func newTestRepo(t *testing.T) repository.Repository {
 	if err != nil {
 		t.Fatalf("create tables: %v", err)
 	}
-	return repository.NewSQLiteRepository(db)
+	return repository.NewPostgresRepository(db)
 }
 
 // ── ListStock ─────────────────────────────────────────────────────────────────

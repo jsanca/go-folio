@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"os"
 
 	"github.com/jsanca/go-folio/inventory-service/internal/config"
 	"github.com/jsanca/go-folio/inventory-service/internal/database"
@@ -18,7 +18,8 @@ func main() {
 
 	db, err := database.Connect(cfg)
 	if err != nil {
-		log.Fatalf("connect db: %v", err)
+		logger.Error("connect db", "err", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
@@ -36,6 +37,7 @@ func main() {
 	srv := server.New(inventoryRT.Svc, logger)
 	logger.Info("grpc server listening", "addr", cfg.Port)
 	if err := srv.Start(cfg.Port); err != nil {
-		log.Fatalf("server: %v", err)
+		logger.Error("server", "err", err)
+		os.Exit(1)
 	}
 }

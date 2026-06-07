@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"os"
 
 	"github.com/jsanca/go-folio/gateway-service/internal/config"
 	"github.com/jsanca/go-folio/gateway-service/internal/observability"
@@ -16,11 +16,12 @@ func main() {
 
 	rt, err := runtime.NewGatewayRuntime(context.Background(), cfg)
 	if err != nil {
-		log.Fatalf("init runtime: %v", err)
+		logger.Error("init runtime", "err", err)
+		os.Exit(1)
 	}
 
 	if rt.Auth.Permissive() {
-		logger.Warn("KEYCLOAK_URL not set — auth middleware is in permissive mode, all requests pass through")
+		logger.Warn("permissive auth is active — all requests are unauthenticated; DO NOT use in production")
 	}
 
 	composite := runtime.NewComposite(rt)
@@ -33,6 +34,7 @@ func main() {
 	srv := server.New(rt, logger)
 	logger.Info("gateway listening", "addr", cfg.Port)
 	if err := srv.Start(cfg.Port); err != nil {
-		log.Fatalf("server: %v", err)
+		logger.Error("server", "err", err)
+		os.Exit(1)
 	}
 }

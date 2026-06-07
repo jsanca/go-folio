@@ -38,13 +38,29 @@ type PostgresRepository struct {
 	db *sql.DB
 }
 
-// NewSQLiteRepository creates a Repository backed by the given connection.
-// The name is kept for backwards compatibility with existing call sites.
-func NewSQLiteRepository(db *sql.DB) *PostgresRepository {
+// NewPostgresRepository creates a Repository backed by the given connection.
+func NewPostgresRepository(db *sql.DB) *PostgresRepository {
 	return &PostgresRepository{db: db}
 }
 
-// WithTx returns a Repository that executes within tx.
+// WithTx returns a new Repository instance bound to the given transaction.
+// The caller (service layer) owns the transaction lifecycle: begin, commit, and rollback.
+// Repositories must never open their own transactions; use this method to participate
+// in a transaction started by the service.
+//
+// Typical usage:
+//
+//	tx, err := db.BeginTx(ctx, nil)
+//	if err != nil {
+//	    return err
+//	}
+//	defer tx.Rollback() // no-op after Commit
+//
+//	repo := baseRepo.WithTx(tx)
+//	if err := repo.OperationA(ctx); err != nil {
+//	    return err
+//	}
+//	return tx.Commit()
 func (r *PostgresRepository) WithTx(tx *sql.Tx) Repository {
 	return &pgTxRepository{tx: tx}
 }

@@ -17,7 +17,15 @@ type StockEvent struct {
 	OccurredAt time.Time `json:"occurredAt"`
 }
 
-// Broker distributes StockEvents to all active SSE subscribers.
+// Broker is the gateway-side SSE delivery mechanism for inventory stock events.
+//
+// Ownership boundary:
+//   - inventory-service owns stock state and stock mutations.
+//   - gateway-service owns browser-facing SSE delivery through this broker.
+//   - Browser clients must not connect directly to inventory-service.
+//
+// The gateway subscribes to inventory change signals and publishes them to
+// connected browser clients through this broker.
 type Broker struct {
 	clients map[chan StockEvent]struct{}
 	mu      sync.RWMutex

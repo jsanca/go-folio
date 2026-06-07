@@ -28,9 +28,8 @@ type PostgresCatalogRepository struct {
 	db *sql.DB
 }
 
-// NewSQLiteCatalogRepository creates a PostgresCatalogRepository backed by the given connection.
-// The name is kept for backwards compatibility with existing call sites.
-func NewSQLiteCatalogRepository(db *sql.DB) *PostgresCatalogRepository {
+// NewPostgresCatalogRepository creates a PostgresCatalogRepository backed by the given connection.
+func NewPostgresCatalogRepository(db *sql.DB) *PostgresCatalogRepository {
 	return &PostgresCatalogRepository{db: db}
 }
 
@@ -71,7 +70,24 @@ func (r *PostgresCatalogRepository) ListProducts(ctx context.Context) ([]domain.
 	return listProducts(ctx, r.db)
 }
 
-// WithTx returns a CatalogProductRepository scoped to the given transaction.
+// WithTx returns a new CatalogProductRepository instance bound to the given transaction.
+// The caller (service layer) owns the transaction lifecycle: begin, commit, and rollback.
+// Repositories must never open their own transactions; use this method to participate
+// in a transaction started by the service.
+//
+// Typical usage:
+//
+//	tx, err := db.BeginTx(ctx, nil)
+//	if err != nil {
+//	    return err
+//	}
+//	defer tx.Rollback() // no-op after Commit
+//
+//	repo := baseRepo.WithTx(tx)
+//	if err := repo.OperationA(ctx); err != nil {
+//	    return err
+//	}
+//	return tx.Commit()
 func (r *PostgresCatalogRepository) WithTx(tx *sql.Tx) CatalogProductRepository {
 	return &pgTxCatalogRepository{tx: tx}
 }

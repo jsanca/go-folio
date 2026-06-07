@@ -1,4 +1,14 @@
 // Package service implements the gRPC InventoryServiceServer.
+//
+// Transaction ownership:
+//   - The service layer owns transaction boundaries (unit of work).
+//   - Repositories own SQL operations but never open or commit transactions.
+//   - A repository method must never call db.BeginTx or tx.Commit.
+//   - The service calls WithTx to bind repository operations to a transaction
+//     it controls.
+//
+// This separation keeps business consistency rules in the service layer
+// and keeps repositories focused on persistence mechanics.
 package service
 
 import (
@@ -117,7 +127,10 @@ func (s *Service) ListStock(ctx context.Context, _ *invpb.ListStockRequest) (*in
 	return &invpb.ListStockResponse{Items: items}, nil
 }
 
-// inTx begins a transaction, binds the repository to it, runs fn, and commits.
+// inTx is a service-layer helper that owns the transaction boundary for stock mutations.
+// It begins a transaction, binds the repository to it via WithTx, runs fn, and commits.
+// defer tx.Rollback() is called unconditionally; after a successful Commit it becomes a no-op.
+// Repositories must never call BeginTx or Commit — that responsibility lives here.
 func (s *Service) inTx(ctx context.Context, fn func(repository.Repository) (*domain.Stock, error)) (*domain.Stock, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -134,7 +147,9 @@ func (s *Service) inTx(ctx context.Context, fn func(repository.Repository) (*dom
 	return result, nil
 }
 
-// inTxReservation is inTx for operations that return a *domain.Reservation.
+// inTxReservation is inTx for operations that return a *domain.Reservation (no domain.Stock value).
+// The same transaction ownership rules apply: the service begins and commits;
+// defer tx.Rollback() is a no-op after a successful Commit.
 func (s *Service) inTxReservation(ctx context.Context, fn func(repository.Repository) (*domain.Reservation, error)) (*domain.Reservation, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

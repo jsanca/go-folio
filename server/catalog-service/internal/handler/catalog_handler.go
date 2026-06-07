@@ -104,7 +104,7 @@ func (h *CatalogHandler) getProductBySlug(w http.ResponseWriter, r *http.Request
 }
 
 func (h *CatalogHandler) listProductProjections(w http.ResponseWriter, r *http.Request) {
-	ps, ok := parsePageSizeQP(w, r, "pageSize", 0)
+	ps, ok := parsePageSizeQP(w, r, "pageSize")
 	if !ok {
 		return
 	}
@@ -128,7 +128,7 @@ func (h *CatalogHandler) listProductProjections(w http.ResponseWriter, r *http.R
 }
 
 func (h *CatalogHandler) listVariantInventory(w http.ResponseWriter, r *http.Request) {
-	ps, ok := parsePageSizeQP(w, r, "pageSize", 0)
+	ps, ok := parsePageSizeQP(w, r, "pageSize")
 	if !ok {
 		return
 	}
@@ -292,7 +292,7 @@ func (h *CatalogHandler) addVariant(w http.ResponseWriter, r *http.Request) {
 
 // parsePageSizeQP parses the pageSize query param. Returns 0 (meaning "use service default")
 // when the param is absent. Returns false and writes a 400 if the value is present but invalid.
-func parsePageSizeQP(w http.ResponseWriter, r *http.Request, param string, _ int) (int, bool) {
+func parsePageSizeQP(w http.ResponseWriter, r *http.Request, param string) (int, bool) {
 	raw := r.URL.Query().Get(param)
 	if raw == "" {
 		return 0, true

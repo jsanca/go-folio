@@ -20,7 +20,7 @@ type InventoryRuntime struct {
 
 // NewInventoryRuntime wires the inventory repository and service.
 func NewInventoryRuntime(db *sql.DB, logger *slog.Logger) *InventoryRuntime {
-	repo := repository.NewSQLiteRepository(db)
+	repo := repository.NewPostgresRepository(db)
 	svc := service.NewService(db, repo, logger)
 	return &InventoryRuntime{
 		Svc:  svc,

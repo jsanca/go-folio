@@ -114,6 +114,9 @@ func (h *AdminInventoryHandler) adjustStock(w http.ResponseWriter, r *http.Reque
 		}
 		return
 	}
+	// Broadcast a stock change notification to all connected SSE clients.
+	// Stock mutations always originate in inventory-service; the gateway's role
+	// is delivery to the browser layer only.
 	h.rt.Events.Publish(sse.StockEvent{
 		EventType:  deriveEventType(resp.Available, int32(h.rt.LowStockThreshold)),
 		SKU:        sku,

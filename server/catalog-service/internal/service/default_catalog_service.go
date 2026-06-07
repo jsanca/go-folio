@@ -27,6 +27,16 @@ type defaultCatalogService struct {
 
 // NewCatalogService creates a CatalogService backed by the given repositories.
 // db is used exclusively to begin transactions for mutating operations.
+//
+// Each parameter represents a distinct capability interface, not a distinct
+// implementation. In practice the same *PostgresCatalogRepository satisfies
+// CatalogProductRepository, ProductVariantRepository, ProductImageRepository,
+// and CatalogSyncRepository. Passing them separately keeps each interface small
+// and each dependency explicit. The composition root (runtime package) is the
+// only place that knows all four roles share one concrete object.
+//
+// This is idiomatic Go: prefer small consumer-owned interfaces over large
+// producer-owned ones.
 func NewCatalogService(
 	db *sql.DB,
 	products repository.CatalogProductRepository,
@@ -43,7 +53,10 @@ func NewCatalogService(
 	}
 }
 
-// inTx begins a transaction, binds the product repository to it, runs fn, and commits.
+// inTx is a service-layer helper that owns the transaction boundary for product mutations.
+// It begins a transaction, binds the product repository to it via WithTx, runs fn, and commits.
+// defer tx.Rollback() is called unconditionally; after a successful Commit it becomes a no-op.
+// Repositories must never call BeginTx or Commit — that responsibility lives here.
 func (s *defaultCatalogService) inTx(ctx context.Context, fn func(repository.CatalogProductRepository) (*domain.Product, error)) (*domain.Product, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -60,7 +73,9 @@ func (s *defaultCatalogService) inTx(ctx context.Context, fn func(repository.Cat
 	return result, nil
 }
 
-// inTxVoid is inTx for operations that return only an error.
+// inTxVoid is inTx for operations that return only an error (no domain value).
+// The same transaction ownership rules apply: the service begins and commits;
+// defer tx.Rollback() is a no-op after a successful Commit.
 func (s *defaultCatalogService) inTxVoid(ctx context.Context, fn func(repository.CatalogProductRepository) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
