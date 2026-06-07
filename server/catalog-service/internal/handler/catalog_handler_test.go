@@ -13,7 +13,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jsanca/go-folio/internal/domain"
-	"github.com/jsanca/go-folio/internal/repository"
 	"github.com/jsanca/go-folio/internal/service"
 )
 
@@ -80,6 +79,10 @@ func (s *stubCatalogSvc) ListProductImagesByProductID(ctx context.Context, produ
 	return nil, nil
 }
 func (s *stubCatalogSvc) ListProductImagesByVariantID(ctx context.Context, variantID int64) ([]domain.ProductImage, error) {
+	return nil, nil
+}
+
+func (s *stubCatalogSvc) GetProductBySlug(ctx context.Context, slug string) (*domain.Product, error) {
 	return nil, nil
 }
 
@@ -358,7 +361,7 @@ func TestProductHandler_Create_MalformedJSON(t *testing.T) {
 func TestProductHandler_Create_DuplicateCode(t *testing.T) {
 	svc := &stubCatalogSvc{
 		createProductFn: func(_ context.Context, p *domain.Product) (*domain.Product, error) {
-			return nil, repository.ErrDuplicateProductCode
+			return nil, service.ErrProductConflict
 		},
 	}
 	body := `{"productCode":"DUPE","title":"Dupe","slug":"dupe"}`
@@ -409,7 +412,7 @@ func TestProductHandler_Update_HappyPath(t *testing.T) {
 func TestProductHandler_Update_NotFound(t *testing.T) {
 	svc := &stubCatalogSvc{
 		updateProductFn: func(_ context.Context, id int64, u service.ProductUpdate) (*domain.Product, error) {
-			return nil, repository.ErrProductNotFound
+			return nil, service.ErrProductNotFound
 		},
 	}
 	body := `{"title":"Ghost"}`
@@ -437,7 +440,7 @@ func TestProductHandler_Update_InvalidID(t *testing.T) {
 func TestProductHandler_Update_DuplicateSlug(t *testing.T) {
 	svc := &stubCatalogSvc{
 		updateProductFn: func(_ context.Context, id int64, u service.ProductUpdate) (*domain.Product, error) {
-			return nil, repository.ErrDuplicateSlug
+			return nil, service.ErrProductConflict
 		},
 	}
 	body := `{"slug":"existing-slug"}`
@@ -477,7 +480,7 @@ func TestProductHandler_Delete_HappyPath(t *testing.T) {
 
 func TestProductHandler_Delete_NotFound(t *testing.T) {
 	svc := &stubCatalogSvc{
-		deleteProductFn: func(_ context.Context, id int64) error { return repository.ErrProductNotFound },
+		deleteProductFn: func(_ context.Context, id int64) error { return service.ErrProductNotFound },
 	}
 	req := httptest.NewRequest(http.MethodDelete, "/products/999", nil)
 	rec := httptest.NewRecorder()
@@ -609,7 +612,7 @@ func TestCatalogHandler_GetVariantBySKU_HappyPath(t *testing.T) {
 func TestCatalogHandler_GetVariantBySKU_NotFound(t *testing.T) {
 	svc := &stubCatalogSvc{
 		getVariantBySKUFn: func(_ context.Context, _ string) (*domain.ProductVariant, error) {
-			return nil, repository.ErrVariantNotFound
+			return nil, service.ErrVariantNotFound
 		},
 	}
 	req := httptest.NewRequest(http.MethodGet, "/catalog/variants/GHOST-SKU", nil)
@@ -672,7 +675,7 @@ func TestAddVariant_DuplicateSKU_Returns409(t *testing.T) {
 			return &domain.Product{ID: id}, nil
 		},
 		addVariantFn: func(_ context.Context, _ *domain.ProductVariant) (*domain.ProductVariant, error) {
-			return nil, repository.ErrDuplicateSKU
+			return nil, service.ErrVariantConflict
 		},
 	}
 	body := `{"sku":"DUPE-SKU","retailPriceCents":1000,"currency":"CRC"}`
@@ -695,7 +698,7 @@ func TestAddVariant_DuplicateSKU_Returns409(t *testing.T) {
 func TestAddVariant_ProductNotFound_Returns404(t *testing.T) {
 	svc := &stubCatalogSvc{
 		getProductByIDFn: func(_ context.Context, _ int64) (*domain.Product, error) {
-			return nil, repository.ErrProductNotFound
+			return nil, service.ErrProductNotFound
 		},
 	}
 	body := `{"sku":"BM-02-COL-CO-RO","retailPriceCents":2439000,"currency":"CRC"}`

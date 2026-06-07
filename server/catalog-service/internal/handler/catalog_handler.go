@@ -10,7 +10,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jsanca/go-folio/internal/domain"
-	"github.com/jsanca/go-folio/internal/repository"
 	"github.com/jsanca/go-folio/internal/service"
 )
 
@@ -49,7 +48,7 @@ func (h *CatalogHandler) listProducts(w http.ResponseWriter, r *http.Request) {
 func (h *CatalogHandler) getVariantBySKU(w http.ResponseWriter, r *http.Request) {
 	sku := chi.URLParam(r, "sku")
 	v, err := h.svc.GetVariantBySKU(r.Context(), sku)
-	if errors.Is(err, repository.ErrVariantNotFound) {
+	if errors.Is(err, service.ErrVariantNotFound) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "variant not found")
 		return
 	}
@@ -72,7 +71,7 @@ func (h *CatalogHandler) getVariantBySKU(w http.ResponseWriter, r *http.Request)
 func (h *CatalogHandler) getProductBySlug(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
 	product, err := h.svc.GetProductBySlug(r.Context(), slug)
-	if errors.Is(err, repository.ErrProductNotFound) {
+	if errors.Is(err, service.ErrProductNotFound) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "product not found")
 		return
 	}
@@ -263,7 +262,7 @@ func (h *CatalogHandler) addVariant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := h.svc.GetProductByID(r.Context(), productID); err != nil {
-		if errors.Is(err, repository.ErrProductNotFound) {
+		if errors.Is(err, service.ErrProductNotFound) {
 			writeError(w, http.StatusNotFound, "NOT_FOUND", "product not found")
 			return
 		}
@@ -343,12 +342,12 @@ func parseIDParam(w http.ResponseWriter, r *http.Request, param string) (int64, 
 // handleProductMutationError maps product mutation errors to HTTP responses.
 func handleProductMutationError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, repository.ErrProductNotFound):
+	case errors.Is(err, service.ErrProductNotFound):
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "product not found")
 	case errors.Is(err, service.ErrInvalidProduct):
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
-	case errors.Is(err, repository.ErrDuplicateProductCode), errors.Is(err, repository.ErrDuplicateSlug):
-		writeError(w, http.StatusConflict, "CONFLICT", err.Error())
+	case errors.Is(err, service.ErrProductConflict):
+		writeError(w, http.StatusConflict, "CONFLICT", "product already exists")
 	default:
 		writeError(w, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "internal server error")
 	}
@@ -357,8 +356,8 @@ func handleProductMutationError(w http.ResponseWriter, err error) {
 // handleVariantMutationError maps variant mutation errors to HTTP responses.
 func handleVariantMutationError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, repository.ErrDuplicateSKU):
-		writeError(w, http.StatusConflict, "CONFLICT", err.Error())
+	case errors.Is(err, service.ErrVariantConflict):
+		writeError(w, http.StatusConflict, "CONFLICT", "variant already exists")
 	case errors.Is(err, service.ErrInvalidVariant):
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	default:

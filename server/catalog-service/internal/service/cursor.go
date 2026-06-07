@@ -16,11 +16,11 @@ func encodeCursor(c domain.SyncCursor) string {
 func decodeCursor(raw string) (domain.SyncCursor, error) {
 	b, err := base64.URLEncoding.DecodeString(raw)
 	if err != nil {
-		return domain.SyncCursor{}, fmt.Errorf("%w: %v", ErrInvalidCursor, err)
+		return domain.SyncCursor{}, fmt.Errorf("%w: %w", ErrInvalidCursor, err)
 	}
 	var c domain.SyncCursor
 	if err := json.Unmarshal(b, &c); err != nil {
-		return domain.SyncCursor{}, fmt.Errorf("%w: %v", ErrInvalidCursor, err)
+		return domain.SyncCursor{}, fmt.Errorf("%w: %w", ErrInvalidCursor, err)
 	}
 	if c.UpdatedAt.IsZero() {
 		return domain.SyncCursor{}, fmt.Errorf("%w: missing updatedAt", ErrInvalidCursor)

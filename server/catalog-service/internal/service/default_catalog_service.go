@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -18,52 +19,60 @@ const (
 )
 
 type defaultCatalogService struct {
-	db       *sql.DB
-	products repository.CatalogProductRepository
-	variants repository.ProductVariantRepository
-	images   repository.ProductImageRepository
-	syncRepo repository.CatalogSyncRepository
+	db            *sql.DB
+	productReader repository.ProductReader
+	productWriter repository.ProductWriter
+	variantReader repository.VariantReader
+	variantWriter repository.VariantWriter
+	imageReader   repository.ImageReader
+	imageWriter   repository.ImageWriter
+	sync          repository.SyncReader
 }
 
-// NewCatalogService creates a CatalogService backed by the given repositories.
+// NewCatalogService creates a CatalogService backed by the given role interfaces.
 // db is used exclusively to begin transactions for mutating operations.
 //
 // Each parameter represents a distinct capability interface, not a distinct
 // implementation. In practice the same *PostgresCatalogRepository satisfies
-// CatalogProductRepository, ProductVariantRepository, ProductImageRepository,
-// and CatalogSyncRepository. Passing them separately keeps each interface small
-// and each dependency explicit. The composition root (runtime package) is the
-// only place that knows all four roles share one concrete object.
+// all seven interfaces. Passing them separately keeps each interface small and
+// each dependency explicit — the composition root (runtime package) is the only
+// place that knows all roles share one concrete object.
 //
 // This is idiomatic Go: prefer small consumer-owned interfaces over large
 // producer-owned ones.
 func NewCatalogService(
 	db *sql.DB,
-	products repository.CatalogProductRepository,
-	variants repository.ProductVariantRepository,
-	images repository.ProductImageRepository,
-	syncRepo repository.CatalogSyncRepository,
+	productReader repository.ProductReader,
+	productWriter repository.ProductWriter,
+	variantReader repository.VariantReader,
+	variantWriter repository.VariantWriter,
+	imageReader repository.ImageReader,
+	imageWriter repository.ImageWriter,
+	sync repository.SyncReader,
 ) CatalogService {
 	return &defaultCatalogService{
-		db:       db,
-		products: products,
-		variants: variants,
-		images:   images,
-		syncRepo: syncRepo,
+		db:            db,
+		productReader: productReader,
+		productWriter: productWriter,
+		variantReader: variantReader,
+		variantWriter: variantWriter,
+		imageReader:   imageReader,
+		imageWriter:   imageWriter,
+		sync:          sync,
 	}
 }
 
 // inTx is a service-layer helper that owns the transaction boundary for product mutations.
-// It begins a transaction, binds the product repository to it via WithTx, runs fn, and commits.
+// It begins a transaction, binds the productWriter to it via WithTx, runs fn, and commits.
 // defer tx.Rollback() is called unconditionally; after a successful Commit it becomes a no-op.
 // Repositories must never call BeginTx or Commit — that responsibility lives here.
-func (s *defaultCatalogService) inTx(ctx context.Context, fn func(repository.CatalogProductRepository) (*domain.Product, error)) (*domain.Product, error) {
+func (s *defaultCatalogService) inTx(ctx context.Context, fn func(repository.ProductWriter) (*domain.Product, error)) (*domain.Product, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
-	result, err := fn(s.products.WithTx(tx))
+	result, err := fn(s.productWriter.WithTx(tx))
 	if err != nil {
 		return nil, err
 	}
@@ -76,13 +85,13 @@ func (s *defaultCatalogService) inTx(ctx context.Context, fn func(repository.Cat
 // inTxVoid is inTx for operations that return only an error (no domain value).
 // The same transaction ownership rules apply: the service begins and commits;
 // defer tx.Rollback() is a no-op after a successful Commit.
-func (s *defaultCatalogService) inTxVoid(ctx context.Context, fn func(repository.CatalogProductRepository) error) error {
+func (s *defaultCatalogService) inTxVoid(ctx context.Context, fn func(repository.ProductWriter) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
-	if err = fn(s.products.WithTx(tx)); err != nil {
+	if err = fn(s.productWriter.WithTx(tx)); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -95,32 +104,44 @@ func (s *defaultCatalogService) inTxVoid(ctx context.Context, fn func(repository
 
 func (s *defaultCatalogService) CreateProduct(ctx context.Context, p *domain.Product) (*domain.Product, error) {
 	if err := p.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidProduct, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidProduct, err)
 	}
-	return s.inTx(ctx, func(r repository.CatalogProductRepository) (*domain.Product, error) {
-		return r.CreateProduct(ctx, p)
+	return s.inTx(ctx, func(r repository.ProductWriter) (*domain.Product, error) {
+		created, err := r.CreateProduct(ctx, p)
+		if err != nil {
+			return nil, mapRepoErr(err)
+		}
+		return created, nil
 	})
 }
 
 func (s *defaultCatalogService) GetProductByID(ctx context.Context, id int64) (*domain.Product, error) {
-	return s.products.GetProductByID(ctx, id)
+	p, err := s.productReader.GetProductByID(ctx, id)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return p, nil
 }
 
 func (s *defaultCatalogService) GetProductBySlug(ctx context.Context, slug string) (*domain.Product, error) {
-	return s.products.GetProductBySlug(ctx, slug)
+	p, err := s.productReader.GetProductBySlug(ctx, slug)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return p, nil
 }
 
 func (s *defaultCatalogService) ListProducts(ctx context.Context) ([]domain.Product, error) {
-	return s.products.ListProducts(ctx)
+	return s.productReader.ListProducts(ctx)
 }
 
 // UpdateProduct applies non-nil fields from update onto the existing product, validates, and persists.
 // A SELECT FOR UPDATE is used on the initial fetch to prevent races between concurrent edits.
 func (s *defaultCatalogService) UpdateProduct(ctx context.Context, id int64, update ProductUpdate) (*domain.Product, error) {
-	return s.inTx(ctx, func(r repository.CatalogProductRepository) (*domain.Product, error) {
+	return s.inTx(ctx, func(r repository.ProductWriter) (*domain.Product, error) {
 		existing, err := r.GetProductByIDForUpdate(ctx, id)
 		if err != nil {
-			return nil, err
+			return nil, mapRepoErr(err)
 		}
 		if update.ProductCode != nil {
 			existing.ProductCode = *update.ProductCode
@@ -147,16 +168,23 @@ func (s *defaultCatalogService) UpdateProduct(ctx context.Context, id int64, upd
 			existing.Active = *update.Active
 		}
 		if err := existing.Validate(); err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalidProduct, err)
+			return nil, fmt.Errorf("%w: %w", ErrInvalidProduct, err)
 		}
-		return r.UpdateProduct(ctx, id, existing)
+		updated, err := r.UpdateProduct(ctx, id, existing)
+		if err != nil {
+			return nil, mapRepoErr(err)
+		}
+		return updated, nil
 	})
 }
 
 // DeleteProduct removes the product with the given id.
 func (s *defaultCatalogService) DeleteProduct(ctx context.Context, id int64) error {
-	return s.inTxVoid(ctx, func(r repository.CatalogProductRepository) error {
-		return r.DeleteProduct(ctx, id)
+	return s.inTxVoid(ctx, func(r repository.ProductWriter) error {
+		if err := r.DeleteProduct(ctx, id); err != nil {
+			return mapRepoErr(err)
+		}
+		return nil
 	})
 }
 
@@ -164,13 +192,21 @@ func (s *defaultCatalogService) DeleteProduct(ctx context.Context, id int64) err
 
 func (s *defaultCatalogService) AddVariantToProduct(ctx context.Context, v *domain.ProductVariant) (*domain.ProductVariant, error) {
 	if err := v.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidVariant, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidVariant, err)
 	}
-	return s.variants.AddVariant(ctx, v)
+	created, err := s.variantWriter.AddVariant(ctx, v)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return created, nil
 }
 
 func (s *defaultCatalogService) GetVariantBySKU(ctx context.Context, sku string) (*domain.ProductVariant, error) {
-	return s.variants.GetVariantBySKU(ctx, sku)
+	v, err := s.variantReader.GetVariantBySKU(ctx, sku)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return v, nil
 }
 
 func (s *defaultCatalogService) UpdateVariantPricing(ctx context.Context, sku string, retail domain.Money, sale *domain.Money, currency string) error {
@@ -183,28 +219,31 @@ func (s *defaultCatalogService) UpdateVariantPricing(ctx context.Context, sku st
 	if currency == "" {
 		return fmt.Errorf("%w: currency is required", ErrInvalidVariant)
 	}
-	return s.variants.UpdateVariantPricing(ctx, sku, retail, sale, currency)
+	if err := s.variantWriter.UpdateVariantPricing(ctx, sku, retail, sale, currency); err != nil {
+		return mapRepoErr(err)
+	}
+	return nil
 }
 
 func (s *defaultCatalogService) ListVariantsByProductID(ctx context.Context, productID int64) ([]domain.ProductVariant, error) {
-	return s.variants.ListVariantsByProductID(ctx, productID)
+	return s.variantReader.ListVariantsByProductID(ctx, productID)
 }
 
 // ── Image ────────────────────────────────────────────────────────────────────
 
 func (s *defaultCatalogService) AddProductImage(ctx context.Context, img *domain.ProductImage) (*domain.ProductImage, error) {
 	if err := img.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidImage, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidImage, err)
 	}
-	return s.images.AddImage(ctx, img)
+	return s.imageWriter.AddImage(ctx, img)
 }
 
 func (s *defaultCatalogService) ListProductImagesByProductID(ctx context.Context, productID int64) ([]domain.ProductImage, error) {
-	return s.images.ListImagesByProductID(ctx, productID)
+	return s.imageReader.ListImagesByProductID(ctx, productID)
 }
 
 func (s *defaultCatalogService) ListProductImagesByVariantID(ctx context.Context, variantID int64) ([]domain.ProductImage, error) {
-	return s.images.ListImagesByVariantID(ctx, variantID)
+	return s.imageReader.ListImagesByVariantID(ctx, variantID)
 }
 
 // ── Sync ──────────────────────────────────────────────────────────────────────
@@ -229,7 +268,7 @@ func (s *defaultCatalogService) ListProductProjections(ctx context.Context, q do
 		q.AfterID = c.ID
 	}
 
-	items, hasNext, err := s.syncRepo.ListProductProjectionPage(ctx, q)
+	items, hasNext, err := s.sync.ListProductProjectionPage(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("list product projections: %w", err)
 	}
@@ -284,7 +323,7 @@ func (s *defaultCatalogService) ListVariantInventory(ctx context.Context, q doma
 		q.AfterID = c.ID
 	}
 
-	items, hasNext, err := s.syncRepo.ListVariantInventoryPage(ctx, q)
+	items, hasNext, err := s.sync.ListVariantInventoryPage(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("list variant inventory: %w", err)
 	}
@@ -309,4 +348,20 @@ func (s *defaultCatalogService) ListVariantInventory(ctx context.Context, q doma
 		HasNext:    hasNext,
 		SyncToken:  syncToken,
 	}, nil
+}
+
+// mapRepoErr translates repository sentinel errors into service sentinels so
+// that the handler layer does not need to import the repository package.
+func mapRepoErr(err error) error {
+	switch {
+	case errors.Is(err, repository.ErrProductNotFound):
+		return ErrProductNotFound
+	case errors.Is(err, repository.ErrVariantNotFound):
+		return ErrVariantNotFound
+	case errors.Is(err, repository.ErrDuplicateProductCode), errors.Is(err, repository.ErrDuplicateSlug):
+		return ErrProductConflict
+	case errors.Is(err, repository.ErrDuplicateSKU):
+		return ErrVariantConflict
+	}
+	return err
 }

@@ -21,9 +21,10 @@ type querier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// PostgresCatalogRepository implements CatalogProductRepository,
-// ProductVariantRepository, ProductImageRepository, and CatalogSyncRepository
-// over a PostgreSQL database.
+// PostgresCatalogRepository implements ProductReader, ProductWriter,
+// VariantReader, VariantWriter, ImageReader, ImageWriter, and SyncReader
+// over a PostgreSQL database. A single concrete type satisfies all seven
+// consumer-owned interfaces — the runtime is the only place that knows this.
 type PostgresCatalogRepository struct {
 	db *sql.DB
 }
@@ -88,13 +89,13 @@ func (r *PostgresCatalogRepository) ListProducts(ctx context.Context) ([]domain.
 //	    return err
 //	}
 //	return tx.Commit()
-func (r *PostgresCatalogRepository) WithTx(tx *sql.Tx) CatalogProductRepository {
+func (r *PostgresCatalogRepository) WithTx(tx *sql.Tx) ProductWriter {
 	return &pgTxCatalogRepository{tx: tx}
 }
 
 // ── pgTxCatalogRepository ────────────────────────────────────────────────────
 
-// pgTxCatalogRepository is a transaction-scoped CatalogProductRepository.
+// pgTxCatalogRepository is a transaction-scoped ProductWriter.
 type pgTxCatalogRepository struct {
 	tx *sql.Tx
 }
@@ -134,8 +135,8 @@ func (r *pgTxCatalogRepository) ListProducts(ctx context.Context) ([]domain.Prod
 	return listProducts(ctx, r.tx)
 }
 
-// WithTx returns a new transaction-scoped CatalogProductRepository bound to tx.
-func (r *pgTxCatalogRepository) WithTx(tx *sql.Tx) CatalogProductRepository {
+// WithTx returns a new transaction-scoped ProductWriter bound to tx.
+func (r *pgTxCatalogRepository) WithTx(tx *sql.Tx) ProductWriter {
 	return &pgTxCatalogRepository{tx: tx}
 }
 

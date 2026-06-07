@@ -16,12 +16,24 @@ type CatalogRuntime struct {
 }
 
 // NewCatalogRuntime wires all catalog repositories and services.
-// The four-argument NewCatalogService call is intentional: it is the explicit
-// cost of interface segregation at this layer.
+// The same *PostgresCatalogRepository satisfies all seven consumer-owned
+// interfaces (ProductReader, ProductWriter, VariantReader, VariantWriter,
+// ImageReader, ImageWriter, SyncReader). Passing it once per role keeps each
+// interface small and each service dependency explicit. This is the only place
+// in the codebase that knows all roles share one concrete object.
 func NewCatalogRuntime(db *sql.DB) *CatalogRuntime {
 	catalogRepo := repository.NewPostgresCatalogRepository(db)
 	return &CatalogRuntime{
-		CatalogSvc: service.NewCatalogService(db, catalogRepo, catalogRepo, catalogRepo, catalogRepo),
+		CatalogSvc: service.NewCatalogService(
+			db,
+			catalogRepo, // ProductReader
+			catalogRepo, // ProductWriter
+			catalogRepo, // VariantReader
+			catalogRepo, // VariantWriter
+			catalogRepo, // ImageReader
+			catalogRepo, // ImageWriter
+			catalogRepo, // SyncReader
+		),
 	}
 }
 

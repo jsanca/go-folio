@@ -67,7 +67,7 @@ func (r *fakeRepository) ReserveStock(_ context.Context, sku string, quantity in
 	if s.Available < quantity {
 		return nil, repository.ErrInsufficientStock
 	}
-	id := repository.NewID()
+	id, _ := repository.NewID()
 	s.Available -= quantity
 	s.Reserved += quantity
 	res := &domain.Reservation{ID: id, SKU: sku, Quantity: quantity, OrderID: orderID}

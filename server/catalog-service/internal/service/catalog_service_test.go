@@ -87,6 +87,16 @@ func (f *fakeCatalogProductRepo) GetProductByIDForUpdate(ctx context.Context, id
 	return f.GetProductByID(ctx, id)
 }
 
+func (f *fakeCatalogProductRepo) GetProductBySlug(_ context.Context, slug string) (*domain.Product, error) {
+	for _, p := range f.products {
+		if p.Slug == slug {
+			cp := *p
+			return &cp, nil
+		}
+	}
+	return nil, repository.ErrProductNotFound
+}
+
 func (f *fakeCatalogProductRepo) ListProducts(_ context.Context) ([]domain.Product, error) {
 	var list []domain.Product
 	for _, p := range f.products {
@@ -122,7 +132,7 @@ func (f *fakeCatalogProductRepo) DeleteProduct(_ context.Context, id int64) erro
 }
 
 // WithTx returns the same fake; transactions are no-ops in tests.
-func (f *fakeCatalogProductRepo) WithTx(_ *sql.Tx) repository.CatalogProductRepository {
+func (f *fakeCatalogProductRepo) WithTx(_ *sql.Tx) repository.ProductWriter {
 	return f
 }
 
@@ -261,12 +271,15 @@ func newTestCatalogService(t *testing.T) (CatalogService, *fakeCatalogProductRep
 	vr := newFakeVariantRepo()
 	ir := newFakeImageRepo()
 	sr := &fakeSyncRepo{}
-	return NewCatalogService(newTestDB(t), pr, vr, ir, sr), pr, vr, ir
+	return NewCatalogService(newTestDB(t), pr, pr, vr, vr, ir, ir, sr), pr, vr, ir
 }
 
 func newSyncService(t *testing.T, sr *fakeSyncRepo) CatalogService {
 	t.Helper()
-	return NewCatalogService(newTestDB(t), newFakeCatalogProductRepo(), newFakeVariantRepo(), newFakeImageRepo(), sr)
+	pr := newFakeCatalogProductRepo()
+	vr := newFakeVariantRepo()
+	ir := newFakeImageRepo()
+	return NewCatalogService(newTestDB(t), pr, pr, vr, vr, ir, ir, sr)
 }
 
 // ── Product tests ─────────────────────────────────────────────────────────────
@@ -303,7 +316,7 @@ func TestCatalog_CreateProduct_ValidatesWithoutSKUOrPriceOrStock(t *testing.T) {
 func TestCatalog_GetProductByID_NotFound(t *testing.T) {
 	svc, _, _, _ := newTestCatalogService(t)
 	_, err := svc.GetProductByID(context.Background(), 999)
-	if !errors.Is(err, repository.ErrProductNotFound) {
+	if !errors.Is(err, ErrProductNotFound) {
 		t.Errorf("expected ErrProductNotFound, got %v", err)
 	}
 }
@@ -360,7 +373,7 @@ func TestCatalog_UpdateVariantPricing_BySKU(t *testing.T) {
 func TestCatalog_UpdateVariantPricing_NotFound(t *testing.T) {
 	svc, _, _, _ := newTestCatalogService(t)
 	err := svc.UpdateVariantPricing(context.Background(), "GHOST", domain.Money{}, nil, "CRC")
-	if !errors.Is(err, repository.ErrVariantNotFound) {
+	if !errors.Is(err, ErrVariantNotFound) {
 		t.Errorf("expected ErrVariantNotFound, got %v", err)
 	}
 }
@@ -722,7 +735,7 @@ func TestCatalog_UpdateProduct_PartialUpdate(t *testing.T) {
 func TestCatalog_UpdateProduct_NotFound(t *testing.T) {
 	svc, _, _, _ := newTestCatalogService(t)
 	_, err := svc.UpdateProduct(context.Background(), 999, ProductUpdate{})
-	if !errors.Is(err, repository.ErrProductNotFound) {
+	if !errors.Is(err, ErrProductNotFound) {
 		t.Errorf("expected ErrProductNotFound, got %v", err)
 	}
 }
@@ -734,8 +747,8 @@ func TestCatalog_UpdateProduct_DuplicateCode(t *testing.T) {
 
 	code := "FIRST"
 	_, err := svc.UpdateProduct(context.Background(), second.ID, ProductUpdate{ProductCode: &code})
-	if !errors.Is(err, repository.ErrDuplicateProductCode) {
-		t.Errorf("expected ErrDuplicateProductCode, got %v", err)
+	if !errors.Is(err, ErrProductConflict) {
+		t.Errorf("expected ErrProductConflict, got %v", err)
 	}
 }
 
@@ -785,7 +798,7 @@ func TestCatalog_DeleteProduct_HappyPath(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	_, err := svc.GetProductByID(context.Background(), created.ID)
-	if !errors.Is(err, repository.ErrProductNotFound) {
+	if !errors.Is(err, ErrProductNotFound) {
 		t.Errorf("expected ErrProductNotFound after delete, got %v", err)
 	}
 }
@@ -793,7 +806,7 @@ func TestCatalog_DeleteProduct_HappyPath(t *testing.T) {
 func TestCatalog_DeleteProduct_NotFound(t *testing.T) {
 	svc, _, _, _ := newTestCatalogService(t)
 	err := svc.DeleteProduct(context.Background(), 999)
-	if !errors.Is(err, repository.ErrProductNotFound) {
+	if !errors.Is(err, ErrProductNotFound) {
 		t.Errorf("expected ErrProductNotFound, got %v", err)
 	}
 }
@@ -846,7 +859,7 @@ func TestCatalog_GetVariantBySKU_HappyPath(t *testing.T) {
 func TestCatalog_GetVariantBySKU_NotFound(t *testing.T) {
 	svc, _, _, _ := newTestCatalogService(t)
 	_, err := svc.GetVariantBySKU(context.Background(), "GHOST-SKU")
-	if !errors.Is(err, repository.ErrVariantNotFound) {
+	if !errors.Is(err, ErrVariantNotFound) {
 		t.Errorf("expected ErrVariantNotFound, got %v", err)
 	}
 }

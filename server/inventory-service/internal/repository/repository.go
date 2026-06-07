@@ -204,7 +204,10 @@ func reserveStock(ctx context.Context, q querier, sku string, quantity int32, or
 	if s.Available < quantity {
 		return nil, fmt.Errorf("%w: sku=%s requested=%d available=%d", ErrInsufficientStock, sku, quantity, s.Available)
 	}
-	id := NewID()
+	id, err := NewID()
+	if err != nil {
+		return nil, err
+	}
 	if _, err = q.ExecContext(ctx,
 		`INSERT INTO reservations (id, sku, quantity, order_id) VALUES ($1, $2, $3, $4)`,
 		id, sku, quantity, orderID,
@@ -266,10 +269,12 @@ func listStock(ctx context.Context, q querier) ([]domain.Stock, error) {
 }
 
 // NewID generates a random UUID v4.
-func NewID() string {
+func NewID() (string, error) {
 	var b [16]byte
-	rand.Read(b[:]) //nolint:errcheck
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate id: %w", err)
+	}
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:]), nil
 }

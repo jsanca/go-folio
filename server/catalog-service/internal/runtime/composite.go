@@ -22,6 +22,9 @@ func NewComposite(closers ...io.Closer) *CompositeRuntime {
 func (c *CompositeRuntime) Close() error {
 	var errs []error
 	for i := len(c.closers) - 1; i >= 0; i-- {
+		if c.closers[i] == nil {
+			continue
+		}
 		if err := c.closers[i].Close(); err != nil {
 			errs = append(errs, err)
 		}
