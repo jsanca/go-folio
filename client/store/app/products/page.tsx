@@ -3,7 +3,7 @@ import { type Product } from '../components/ProductCard'
 
 async function fetchProducts(): Promise<Product[]> {
   const gatewayURL = process.env.GATEWAY_URL ?? 'http://gateway-service:8090'
-  const url = `${gatewayURL}/products`
+  const url = `${gatewayURL}/public/products`
   try {
     const res = await fetch(url, { cache: 'no-store' })
     if (!res.ok) {

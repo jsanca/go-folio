@@ -29,11 +29,11 @@ func (h *CatalogHandler) RegisterRoutes(r chi.Router) {
 	r.Post("/products", h.createProduct)
 	r.Patch("/products/{id}", h.updateProduct)
 	r.Delete("/products/{id}", h.deleteProduct)
-	r.Post("/catalog/products/{id}/variants", h.addVariant)
+	r.Post("/products/{id}/variants", h.addVariant)
 	r.Get("/catalog/product-projections", h.listProductProjections)
 	r.Get("/catalog/variant-inventory", h.listVariantInventory)
-	r.Get("/catalog/variants/{sku}", h.getVariantBySKU)
-	r.Get("/products/slug/{slug}", h.getProductBySlug)
+	r.Get("/products/variants/{sku}", h.getVariantBySKU)
+	r.Get("/products/{slug}", h.getProductBySlug)
 }
 
 func (h *CatalogHandler) listProducts(w http.ResponseWriter, r *http.Request) {
@@ -236,7 +236,7 @@ func (h *CatalogHandler) deleteProduct(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// createVariantRequest is the body for POST /catalog/products/{id}/variants.
+// createVariantRequest is the body for POST /products/{id}/variants.
 type createVariantRequest struct {
 	SKU              string `json:"sku"`
 	ColorName        string `json:"colorName"`

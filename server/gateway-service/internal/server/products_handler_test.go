@@ -35,24 +35,18 @@ var publicFixtureProjections = []clients.CatalogProjection{
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// publicCatalogSrv starts a fake catalog HTTP server that handles both endpoints
+// publicCatalogSrv starts a fake catalog HTTP server that handles the two endpoints
 // used by ProductsHandler:
 //
-//	GET /products                → JSON array of all projections
-//	GET /catalog/variants/{sku} → matching CatalogProjection, or 404
+//	GET /products          → JSON array of all projections
+//	GET /products/{slug}   → matching CatalogProjection by slug, or 404
 func publicCatalogSrv(t *testing.T, projections []clients.CatalogProjection) *httptest.Server {
 	t.Helper()
 	listPayload, _ := json.Marshal(projections)
 
-	type entry struct {
-		proj    clients.CatalogProjection
-		variant clients.CatalogVariant
-	}
-	bysku := make(map[string]entry)
+	byslug := make(map[string]clients.CatalogProjection)
 	for _, p := range projections {
-		for _, v := range p.Variants {
-			bysku[v.SKU] = entry{proj: p, variant: v}
-		}
+		byslug[p.Product.Slug] = p
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -60,18 +54,15 @@ func publicCatalogSrv(t *testing.T, projections []clients.CatalogProjection) *ht
 		switch {
 		case r.URL.Path == "/products":
 			w.Write(listPayload) //nolint:errcheck
-		case strings.HasPrefix(r.URL.Path, "/catalog/variants/"):
-			sku := strings.TrimPrefix(r.URL.Path, "/catalog/variants/")
-			e, ok := bysku[sku]
+		case strings.HasPrefix(r.URL.Path, "/products/"):
+			slug := strings.TrimPrefix(r.URL.Path, "/products/")
+			proj, ok := byslug[slug]
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
 				w.Write([]byte(`{"error":{"code":"NOT_FOUND","message":"not found"}}`)) //nolint:errcheck
 				return
 			}
-			payload, _ := json.Marshal(clients.CatalogProjection{
-				Product:  e.proj.Product,
-				Variants: []clients.CatalogVariant{e.variant},
-			})
+			payload, _ := json.Marshal(proj)
 			w.Write(payload) //nolint:errcheck
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -105,7 +96,7 @@ func TestPublicProducts_ListProducts_HappyPath(t *testing.T) {
 	gw := httptest.NewServer(server.New(rt, logger))
 	t.Cleanup(gw.Close)
 
-	resp, err := http.Get(gw.URL + "/products")
+	resp, err := http.Get(gw.URL + "/public/products")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +155,7 @@ func TestPublicProducts_ListProducts_InventoryUnreachable(t *testing.T) {
 	gw := httptest.NewServer(server.New(rt, logger))
 	t.Cleanup(gw.Close)
 
-	resp, err := http.Get(gw.URL + "/products")
+	resp, err := http.Get(gw.URL + "/public/products")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,11 +191,11 @@ func TestPublicProducts_ListProducts_InventoryUnreachable(t *testing.T) {
 	}
 }
 
-// ── GET /products/{sku} ───────────────────────────────────────────────────────
+// ── GET /products/{slug} ──────────────────────────────────────────────────────
 
-// TestPublicProducts_GetBySKU_HappyPath verifies that GET /products/{sku}
-// returns the single-variant product shape with live stock hydrated.
-func TestPublicProducts_GetBySKU_HappyPath(t *testing.T) {
+// TestPublicProducts_GetBySlug_HappyPath verifies that GET /products/{slug}
+// returns the full product shape with all variants and live stock hydrated.
+func TestPublicProducts_GetBySlug_HappyPath(t *testing.T) {
 	fake := &fakeInventoryServer{
 		getStockFn: func(req *invpb.GetStockRequest) (*invpb.GetStockResponse, error) {
 			return &invpb.GetStockResponse{Sku: req.Sku, Available: 7, Reserved: 1}, nil
@@ -218,7 +209,7 @@ func TestPublicProducts_GetBySKU_HappyPath(t *testing.T) {
 	gw := httptest.NewServer(server.New(rt, logger))
 	t.Cleanup(gw.Close)
 
-	resp, err := http.Get(gw.URL + "/products/BAG-001-BRN")
+	resp, err := http.Get(gw.URL + "/public/products/leather-tote")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,13 +221,16 @@ func TestPublicProducts_GetBySKU_HappyPath(t *testing.T) {
 
 	var product struct {
 		ProductCode string `json:"productCode"`
-		SKU         string `json:"sku"`
-		ColorName   string `json:"colorName"`
-		Stock       struct {
-			Available int32  `json:"available"`
-			Reserved  int32  `json:"reserved"`
-			Status    string `json:"stockStatus"`
-		} `json:"stock"`
+		Slug        string `json:"slug"`
+		Variants    []struct {
+			SKU       string `json:"sku"`
+			ColorName string `json:"colorName"`
+			Stock     struct {
+				Available int    `json:"available"`
+				Reserved  int    `json:"reserved"`
+				Status    string `json:"stockStatus"`
+			} `json:"stock"`
+		} `json:"variants"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&product); err != nil {
 		t.Fatal("decode:", err)
@@ -244,36 +238,37 @@ func TestPublicProducts_GetBySKU_HappyPath(t *testing.T) {
 	if product.ProductCode != "BAG-001" {
 		t.Errorf("productCode: want BAG-001, got %s", product.ProductCode)
 	}
-	if product.SKU != "BAG-001-BRN" {
-		t.Errorf("sku: want BAG-001-BRN, got %s", product.SKU)
+	if product.Slug != "leather-tote" {
+		t.Errorf("slug: want leather-tote, got %s", product.Slug)
 	}
-	if product.ColorName != "Brown" {
-		t.Errorf("colorName: want Brown, got %s", product.ColorName)
+	if len(product.Variants) == 0 {
+		t.Fatal("want at least one variant")
 	}
-	if product.Stock.Available != 7 {
-		t.Errorf("available: want 7, got %d", product.Stock.Available)
+	v := product.Variants[0]
+	if v.Stock.Available != 7 {
+		t.Errorf("available: want 7, got %d", v.Stock.Available)
 	}
-	if product.Stock.Reserved != 1 {
-		t.Errorf("reserved: want 1, got %d", product.Stock.Reserved)
+	if v.Stock.Reserved != 1 {
+		t.Errorf("reserved: want 1, got %d", v.Stock.Reserved)
 	}
-	if product.Stock.Status != "IN_STOCK" {
-		t.Errorf("status: want IN_STOCK, got %s", product.Stock.Status)
+	if v.Stock.Status != "IN_STOCK" {
+		t.Errorf("status: want IN_STOCK, got %s", v.Stock.Status)
 	}
 }
 
-// TestPublicProducts_GetBySKU_NotFound verifies that a SKU absent from
+// TestPublicProducts_GetBySlug_NotFound verifies that a slug absent from
 // catalog-service causes the gateway to return 404.
-func TestPublicProducts_GetBySKU_NotFound(t *testing.T) {
+func TestPublicProducts_GetBySlug_NotFound(t *testing.T) {
 	fake := &fakeInventoryServer{}
 	addr := startFakeInventorySrv(t, fake)
-	catalog := publicCatalogSrv(t, publicFixtureProjections) // GHOST-SKU not in fixture
+	catalog := publicCatalogSrv(t, publicFixtureProjections) // ghost-slug not in fixture
 	rt := buildRuntimeWithInv(t, catalog.URL, addr, "")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	gw := httptest.NewServer(server.New(rt, logger))
 	t.Cleanup(gw.Close)
 
-	resp, err := http.Get(gw.URL + "/products/GHOST-SKU-999")
+	resp, err := http.Get(gw.URL + "/public/products/ghost-slug-999")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +321,7 @@ func TestPublicProducts_DeriveStockStatus(t *testing.T) {
 			gw := httptest.NewServer(server.New(rt, logger))
 			t.Cleanup(gw.Close)
 
-			resp, err := http.Get(gw.URL + "/products")
+			resp, err := http.Get(gw.URL + "/public/products")
 			if err != nil {
 				t.Fatal(err)
 			}

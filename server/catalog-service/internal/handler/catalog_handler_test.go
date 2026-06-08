@@ -565,7 +565,7 @@ func TestCatalogHandler_ListProducts_EmptyList(t *testing.T) {
 	}
 }
 
-// ── GET /catalog/variants/{sku} handler tests ─────────────────────────────────
+// ── GET /products/variants/{sku} handler tests ────────────────────────────────
 
 func TestCatalogHandler_GetVariantBySKU_HappyPath(t *testing.T) {
 	svc := &stubCatalogSvc{
@@ -576,7 +576,7 @@ func TestCatalogHandler_GetVariantBySKU_HappyPath(t *testing.T) {
 			return &domain.Product{ID: id, ProductCode: "BM-02", Title: "Billetera", Slug: "billetera"}, nil
 		},
 	}
-	req := httptest.NewRequest(http.MethodGet, "/catalog/variants/BM-02-COL-CO-CA", nil)
+	req := httptest.NewRequest(http.MethodGet, "/products/variants/BM-02-COL-CO-CA", nil)
 	rec := httptest.NewRecorder()
 	newCatalogRouter(svc).ServeHTTP(rec, req)
 
@@ -615,7 +615,7 @@ func TestCatalogHandler_GetVariantBySKU_NotFound(t *testing.T) {
 			return nil, service.ErrVariantNotFound
 		},
 	}
-	req := httptest.NewRequest(http.MethodGet, "/catalog/variants/GHOST-SKU", nil)
+	req := httptest.NewRequest(http.MethodGet, "/products/variants/GHOST-SKU", nil)
 	rec := httptest.NewRecorder()
 	newCatalogRouter(svc).ServeHTTP(rec, req)
 
@@ -630,7 +630,7 @@ func TestCatalogHandler_GetVariantBySKU_NotFound(t *testing.T) {
 	}
 }
 
-// ── POST /catalog/products/{id}/variants handler tests ────────────────────────
+// ── POST /products/{id}/variants handler tests ────────────────────────────────
 
 func TestAddVariant_HappyPath(t *testing.T) {
 	price := int64(2439000)
@@ -644,7 +644,7 @@ func TestAddVariant_HappyPath(t *testing.T) {
 		},
 	}
 	body := `{"sku":"BM-02-COL-CO-RO","colorName":"Rojo","colorSlug":"rojo","primaryColorHex":"#ff0000","retailPriceCents":2439000,"currency":"CRC","active":true}`
-	req := httptest.NewRequest(http.MethodPost, "/catalog/products/1/variants", bytes.NewBufferString(body))
+	req := httptest.NewRequest(http.MethodPost, "/products/1/variants", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	newCatalogRouter(svc).ServeHTTP(rec, req)
@@ -679,7 +679,7 @@ func TestAddVariant_DuplicateSKU_Returns409(t *testing.T) {
 		},
 	}
 	body := `{"sku":"DUPE-SKU","retailPriceCents":1000,"currency":"CRC"}`
-	req := httptest.NewRequest(http.MethodPost, "/catalog/products/1/variants", bytes.NewBufferString(body))
+	req := httptest.NewRequest(http.MethodPost, "/products/1/variants", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	newCatalogRouter(svc).ServeHTTP(rec, req)
@@ -702,7 +702,7 @@ func TestAddVariant_ProductNotFound_Returns404(t *testing.T) {
 		},
 	}
 	body := `{"sku":"BM-02-COL-CO-RO","retailPriceCents":2439000,"currency":"CRC"}`
-	req := httptest.NewRequest(http.MethodPost, "/catalog/products/999/variants", bytes.NewBufferString(body))
+	req := httptest.NewRequest(http.MethodPost, "/products/999/variants", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	newCatalogRouter(svc).ServeHTTP(rec, req)
@@ -734,7 +734,7 @@ func TestAddVariant_MissingRequiredFields_Returns400(t *testing.T) {
 					return &domain.Product{ID: id}, nil
 				},
 			}
-			req := httptest.NewRequest(http.MethodPost, "/catalog/products/1/variants", bytes.NewBufferString(tc.body))
+			req := httptest.NewRequest(http.MethodPost, "/products/1/variants", bytes.NewBufferString(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
 			newCatalogRouter(svc).ServeHTTP(rec, req)

@@ -16,7 +16,7 @@ interface Product {
 async function fetchProduct(slug: string): Promise<Product | null> {
   const gatewayURL = process.env.GATEWAY_URL ?? 'http://gateway-service:8090'
   try {
-    const res = await fetch(`${gatewayURL}/products/${slug}`, {
+    const res = await fetch(`${gatewayURL}/public/products/${slug}`, {
       next: { revalidate: 60 },
     })
     if (res.status === 404) return null

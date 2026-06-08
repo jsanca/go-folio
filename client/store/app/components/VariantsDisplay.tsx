@@ -71,7 +71,7 @@ export default function VariantsDisplay({ variants: initialVariants }: Props) {
     const skus = new Set(initialVariants.map((v) => v.sku))
     const gatewayURL =
       process.env.NEXT_PUBLIC_GATEWAY_URL ?? 'http://localhost:8090'
-    const es = new EventSource(`${gatewayURL}/events`)
+    const es = new EventSource(`${gatewayURL}/public/events`)
 
     es.onmessage = (e: MessageEvent) => {
       try {

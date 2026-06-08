@@ -100,7 +100,7 @@ func (c *CatalogClient) ListProducts(ctx context.Context) ([]CatalogProjection, 
 // GetVariantBySKU fetches the product projection for a single variant SKU.
 // Returns ErrNotFound if catalog-service responds with 404.
 func (c *CatalogClient) GetVariantBySKU(ctx context.Context, sku string) (*CatalogProjection, error) {
-	u := c.baseURL + "/catalog/variants/" + url.PathEscape(sku)
+	u := c.baseURL + "/products/variants/" + url.PathEscape(sku)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build get variant request: %w", err)
@@ -126,7 +126,7 @@ func (c *CatalogClient) GetVariantBySKU(ctx context.Context, sku string) (*Catal
 // GetProductBySlug fetches the full product projection (product + all variants) for a slug.
 // Returns ErrNotFound if catalog-service responds with 404.
 func (c *CatalogClient) GetProductBySlug(ctx context.Context, slug string) (*CatalogProjection, error) {
-	u := c.baseURL + "/products/slug/" + url.PathEscape(slug)
+	u := c.baseURL + "/products/" + url.PathEscape(slug)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build get product by slug request: %w", err)
@@ -175,7 +175,7 @@ func (c *CatalogClient) ProxyRequest(ctx context.Context, method, path string, b
 // Returns *CatalogError if catalog responds with a non-201 status so the
 // caller can forward the upstream body and code unchanged.
 func (c *CatalogClient) AddVariant(ctx context.Context, productID int64, body io.Reader) (*CatalogVariant, error) {
-	path := "/catalog/products/" + strconv.FormatInt(productID, 10) + "/variants"
+	path := "/products/" + strconv.FormatInt(productID, 10) + "/variants"
 	statusCode, respBody, err := c.ProxyRequest(ctx, http.MethodPost, path, body)
 	if err != nil {
 		return nil, fmt.Errorf("add variant: %w", err)
@@ -193,7 +193,7 @@ func (c *CatalogClient) AddVariant(ctx context.Context, productID int64, body io
 // DeleteVariant removes a variant from catalog-service by SKU.
 // Used as the compensating transaction when inventory seeding fails.
 func (c *CatalogClient) DeleteVariant(ctx context.Context, productID int64, sku string) error {
-	path := "/catalog/products/" + strconv.FormatInt(productID, 10) + "/variants/" + url.PathEscape(sku)
+	path := "/products/" + strconv.FormatInt(productID, 10) + "/variants/" + url.PathEscape(sku)
 	statusCode, _, err := c.ProxyRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
 		return fmt.Errorf("delete variant: %w", err)

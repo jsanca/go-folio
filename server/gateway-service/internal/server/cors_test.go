@@ -28,8 +28,8 @@ func TestCORS(t *testing.T) {
 		wantCORSHeader bool
 	}{
 		{
-			name:           "preflight /products from allowed origin",
-			path:           "/products",
+			name:           "preflight /public/products from allowed origin",
+			path:           "/public/products",
 			origin:         "http://localhost:3000",
 			wantCORSHeader: true,
 		},
@@ -41,7 +41,7 @@ func TestCORS(t *testing.T) {
 		},
 		{
 			name:           "preflight from disallowed origin gets no CORS headers",
-			path:           "/products",
+			path:           "/public/products",
 			origin:         "http://evil.example.com",
 			wantCORSHeader: false,
 		},

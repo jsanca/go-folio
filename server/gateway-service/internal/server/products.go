@@ -61,7 +61,8 @@ func NewProductsHandler(rt *runtime.GatewayRuntime, logger *slog.Logger) *Produc
 	return &ProductsHandler{rt: rt, logger: logger}
 }
 
-// RegisterRoutes wires /products and /products/{slug}.
+// RegisterRoutes mounts product routes onto r at /products and /products/{slug}.
+// The prefix applied by the caller determines the final paths.
 func (h *ProductsHandler) RegisterRoutes(r chi.Router) {
 	r.Get("/products", h.listProducts)
 	r.Get("/products/{slug}", h.getProductBySlug)
