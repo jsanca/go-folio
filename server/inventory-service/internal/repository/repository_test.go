@@ -172,6 +172,15 @@ func TestAdjustStock_InsufficientStock(t *testing.T) {
 	if !errors.Is(err, repository.ErrInsufficientStock) {
 		t.Errorf("expected ErrInsufficientStock, got %v", err)
 	}
+
+	// Row must be unchanged — the atomic UPDATE must not have mutated the row.
+	s, err := repo.GetStock(ctx, "BAG-003")
+	if err != nil {
+		t.Fatalf("get stock after failed adjust: %v", err)
+	}
+	if s.Available != 3 {
+		t.Errorf("available must be unchanged: want 3, got %d", s.Available)
+	}
 }
 
 func TestAdjustStock_NotFound(t *testing.T) {
@@ -235,6 +244,18 @@ func TestReserveStock_InsufficientStock(t *testing.T) {
 	if !errors.Is(err, repository.ErrInsufficientStock) {
 		t.Errorf("expected ErrInsufficientStock, got %v", err)
 	}
+
+	// Stock must be unchanged — the atomic UPDATE must not have mutated the row.
+	s, err := repo.GetStock(ctx, "BEL-002")
+	if err != nil {
+		t.Fatalf("get stock after failed reserve: %v", err)
+	}
+	if s.Available != 2 {
+		t.Errorf("available must be unchanged: want 2, got %d", s.Available)
+	}
+	if s.Reserved != 0 {
+		t.Errorf("reserved must be unchanged: want 0, got %d", s.Reserved)
+	}
 }
 
 func TestReserveStock_NotFound(t *testing.T) {
@@ -278,5 +299,41 @@ func TestReleaseStock_ReservationNotFound(t *testing.T) {
 	_, err := repo.ReleaseStock(context.Background(), "non-existent-reservation-id")
 	if !errors.Is(err, repository.ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestReleaseStock_SecondRelease_ReturnsErrNotFound(t *testing.T) {
+	ctx := context.Background()
+	repo := newTestRepo(t)
+
+	if err := repo.SeedSKU(ctx, "WAL-003", 10); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	reservation, err := repo.ReserveStock(ctx, "WAL-003", 3, "ORD-005")
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+
+	// First release succeeds.
+	if _, err := repo.ReleaseStock(ctx, reservation.ID); err != nil {
+		t.Fatalf("first release: %v", err)
+	}
+
+	// Second release of the same ID must return ErrNotFound.
+	_, err = repo.ReleaseStock(ctx, reservation.ID)
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Errorf("second release: expected ErrNotFound, got %v", err)
+	}
+
+	// Stock must not be double-credited.
+	s, err := repo.GetStock(ctx, "WAL-003")
+	if err != nil {
+		t.Fatalf("get stock after double release: %v", err)
+	}
+	if s.Available != 10 {
+		t.Errorf("available after double release: want 10, got %d", s.Available)
+	}
+	if s.Reserved != 0 {
+		t.Errorf("reserved after double release: want 0, got %d", s.Reserved)
 	}
 }

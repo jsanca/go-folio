@@ -179,30 +179,43 @@ func queryStock(ctx context.Context, q querier, sku string) (*domain.Stock, erro
 }
 
 func adjustStock(ctx context.Context, q querier, sku string, delta int32) (*domain.Stock, error) {
-	s, err := queryStock(ctx, q, sku)
-	if err != nil {
-		return nil, err
+	var s domain.Stock
+	err := q.QueryRowContext(ctx,
+		`UPDATE stock
+		 SET    available = available + $1
+		 WHERE  sku = $2
+		   AND  available + $1 >= 0
+		 RETURNING sku, available, reserved`,
+		delta, sku,
+	).Scan(&s.SKU, &s.Available, &s.Reserved)
+	if err == nil {
+		return &s, nil
 	}
-	newAvailable := s.Available + delta
-	if newAvailable < 0 {
-		return nil, fmt.Errorf("%w: sku=%s delta=%d available=%d", ErrInsufficientStock, sku, delta, s.Available)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("adjust stock: %w", err)
 	}
-	if _, err = q.ExecContext(ctx,
-		`UPDATE stock SET available = $1 WHERE sku = $2`, newAvailable, sku,
-	); err != nil {
-		return nil, fmt.Errorf("update stock: %w", err)
-	}
-	s.Available = newAvailable
-	return s, nil
+	return nil, classifyZeroRows(ctx, q, sku)
 }
 
 func reserveStock(ctx context.Context, q querier, sku string, quantity int32, orderID string) (*domain.Reservation, error) {
-	s, err := queryStock(ctx, q, sku)
+	// Atomic guard-and-deduct: zero rows means not found or insufficient stock.
+	result, err := q.ExecContext(ctx,
+		`UPDATE stock
+		 SET    available = available - $1,
+		        reserved  = reserved  + $1
+		 WHERE  sku = $2
+		   AND  available >= $1`,
+		quantity, sku,
+	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reserve stock update: %w", err)
 	}
-	if s.Available < quantity {
-		return nil, fmt.Errorf("%w: sku=%s requested=%d available=%d", ErrInsufficientStock, sku, quantity, s.Available)
+	n, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("reserve stock rows affected: %w", err)
+	}
+	if n == 0 {
+		return nil, classifyZeroRows(ctx, q, sku)
 	}
 	id, err := NewID()
 	if err != nil {
@@ -214,38 +227,48 @@ func reserveStock(ctx context.Context, q querier, sku string, quantity int32, or
 	); err != nil {
 		return nil, fmt.Errorf("insert reservation: %w", err)
 	}
-	if _, err = q.ExecContext(ctx,
-		`UPDATE stock SET available = available - $1, reserved = reserved + $2 WHERE sku = $3`,
-		quantity, quantity, sku,
-	); err != nil {
-		return nil, fmt.Errorf("update stock for reserve: %w", err)
-	}
 	return &domain.Reservation{ID: id, SKU: sku, Quantity: quantity, OrderID: orderID}, nil
 }
 
 func releaseStock(ctx context.Context, q querier, reservationID string) (*domain.Stock, error) {
-	var res domain.Reservation
+	// Atomically claim the reservation — only one concurrent release can succeed.
+	var sku string
+	var quantity int32
 	err := q.QueryRowContext(ctx,
-		`SELECT id, sku, quantity, order_id FROM reservations WHERE id = $1`, reservationID,
-	).Scan(&res.ID, &res.SKU, &res.Quantity, &res.OrderID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("%w: reservation_id=%s", ErrNotFound, reservationID)
-	}
+		`DELETE FROM reservations WHERE id = $1 RETURNING sku, quantity`,
+		reservationID,
+	).Scan(&sku, &quantity)
 	if err != nil {
-		return nil, fmt.Errorf("get reservation: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: reservation_id=%s", ErrNotFound, reservationID)
+		}
+		return nil, fmt.Errorf("delete reservation: %w", err)
 	}
+	// Credit stock only after the reservation was successfully claimed above.
 	if _, err = q.ExecContext(ctx,
-		`UPDATE stock SET available = available + $1, reserved = reserved - $2 WHERE sku = $3`,
-		res.Quantity, res.Quantity, res.SKU,
+		`UPDATE stock
+		 SET available = available + $1,
+		     reserved  = reserved  - $1
+		 WHERE sku = $2`,
+		quantity, sku,
 	); err != nil {
 		return nil, fmt.Errorf("update stock for release: %w", err)
 	}
-	if _, err = q.ExecContext(ctx,
-		`DELETE FROM reservations WHERE id = $1`, reservationID,
-	); err != nil {
-		return nil, fmt.Errorf("delete reservation: %w", err)
+	return queryStock(ctx, q, sku)
+}
+
+// classifyZeroRows is called after an UPDATE on stock returns zero affected rows.
+// It distinguishes "SKU not found" (ErrNotFound) from "guard prevented mutation"
+// (ErrInsufficientStock) by counting matching rows.
+func classifyZeroRows(ctx context.Context, q querier, sku string) error {
+	var count int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM stock WHERE sku = $1`, sku).Scan(&count); err != nil {
+		return fmt.Errorf("classify zero rows: %w", err)
 	}
-	return queryStock(ctx, q, res.SKU)
+	if count == 0 {
+		return fmt.Errorf("%w: sku=%s", ErrNotFound, sku)
+	}
+	return fmt.Errorf("%w: sku=%s", ErrInsufficientStock, sku)
 }
 
 func listStock(ctx context.Context, q querier) ([]domain.Stock, error) {
